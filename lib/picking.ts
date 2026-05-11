@@ -27,26 +27,28 @@ export interface PickTask {
 
 interface OrderItem {
   // SKU
-  productSku?: string; sku?: string; itemCode?: string;
-  // Qty
-  qty?: number; orderQty?: number; quantity?: number; assignedQty?: number;
+  productSku?: string; sku?: string; itemCode?: string; barcode?: string;
+  // Qty — picking lines use assignQty / assignedQty
+  qty?: number; orderQty?: number; quantity?: number;
+  assignQty?: number; assignedQty?: number; pickQty?: number; pickedQty?: number;
   // Product info
-  productName?: string; itemName?: string;
-  // Location — returned by shipping items endpoint
+  productName?: string; itemName?: string; productNm?: string;
+  // Location — picking line has single locationCode OR split zone/aisle/bay/level/position
+  locationCode?: string; location?: string;
   zoneName?: string; zone?: string; zoneCode?: string;
   aisleName?: string; aisle?: string; aisleCode?: string;
   bayName?: string; bay?: string; bayCode?: string;
   levelName?: string; level?: string; levelCode?: string;
   positionName?: string; position?: string; positionCode?: string;
-  locationCode?: string;
   // LocationId
-  inKey?: string; locationId?: string;
-  // Lot / condition
+  inKey?: string; locationId?: string; locationKey?: string;
+  // Lot / condition / occupancy
   lotNo?: string; lot?: string;
   expireDate?: string; expiryDate?: string;
   itemCondition?: string; condition?: string;
+  occupancy?: string; occupancyType?: string; storageType?: string;
   // Item ID for confirm API
-  shippingItemId?: number; itemId?: number; id?: number;
+  shippingItemId?: number; pickingId?: number; pickId?: number; itemId?: number; id?: number;
   [k: string]: unknown;
 }
 
@@ -78,30 +80,47 @@ export async function buildPickList(
   const needsLookup: OrderItem[] = [];
 
   for (const oi of orderItems) {
-    const sku = String(oi.productSku ?? oi.sku ?? oi.itemCode ?? "");
-    const needed = Number(oi.qty ?? oi.orderQty ?? oi.assignedQty ?? oi.quantity ?? 0);
+    const sku = String(oi.productSku ?? oi.sku ?? oi.itemCode ?? oi.barcode ?? "");
+    // picking line qty: assignQty (assigned) > assignedQty > qty > orderQty
+    const needed = Number(
+      oi.assignQty ?? oi.assignedQty ?? oi.pickQty ??
+      oi.qty ?? oi.orderQty ?? oi.quantity ?? 0
+    );
     if (!sku || needed <= 0) continue;
 
+    // Location: picking line may have single locationCode like "01-31-23-03-02"
+    // or split fields zone/aisle/bay/level/position
+    let locationCodeRaw = String(oi.locationCode ?? oi.location ?? "");
     const zone     = String(oi.zoneName  ?? oi.zone     ?? oi.zoneCode     ?? "");
     const aisle    = String(oi.aisleName ?? oi.aisle    ?? oi.aisleCode    ?? "");
     const bay      = String(oi.bayName   ?? oi.bay      ?? oi.bayCode      ?? "");
     const level    = String(oi.levelName ?? oi.level    ?? oi.levelCode    ?? "");
     const position = String(oi.positionName ?? oi.position ?? oi.positionCode ?? "");
 
-    if (zone || aisle || bay) {
-      // Location embedded in item ✓
-      const locationCode = String(oi.locationCode ?? buildLocCode(zone, aisle, bay, level, position));
+    // If we have a compound locationCode, parse it into parts
+    let z = zone, a = aisle, b = bay, l = level, p = position;
+    if (locationCodeRaw && !zone && !aisle) {
+      const sep = locationCodeRaw.includes("/") ? "/" : "-";
+      const parts = locationCodeRaw.split(sep);
+      z = parts[0] ?? ""; a = parts[1] ?? ""; b = parts[2] ?? "";
+      l = parts[3] ?? ""; p = parts[4] ?? "";
+    }
+
+    const hasLocation = !!(locationCodeRaw || z || a || b);
+
+    if (hasLocation) {
+      if (!locationCodeRaw) locationCodeRaw = buildLocCode(z, a, b, l, p);
       tasks.push({
         idx: tasks.length,
-        locationCode,
-        locationId:    String(oi.inKey ?? oi.locationId ?? ""),
-        zone, aisle, bay, level, position,
+        locationCode:   locationCodeRaw,
+        locationId:     String(oi.inKey ?? oi.locationId ?? oi.locationKey ?? ""),
+        zone: z, aisle: a, bay: b, level: l, position: p,
         sku,
-        productName:    String(oi.productName ?? oi.itemName ?? sku),
+        productName:    String(oi.productName ?? oi.itemName ?? oi.productNm ?? sku),
         lotNo:          String(oi.lotNo ?? oi.lot ?? ""),
         expireDate:     String(oi.expireDate ?? oi.expiryDate ?? ""),
         itemCondition:  String(oi.itemCondition ?? oi.condition ?? "GOOD"),
-        shippingItemId: Number(oi.shippingItemId ?? oi.itemId ?? oi.id ?? 0),
+        shippingItemId: Number(oi.shippingItemId ?? oi.pickingId ?? oi.pickId ?? oi.itemId ?? oi.id ?? 0),
         allocatedQty:   needed,
         pickedQty:      0,
         unit:           null,
@@ -232,17 +251,18 @@ export async function confirmPick(
   const payload = {
     shippingOrderCode: orderCode,
     orderCode,
-    shippingItemId: task.shippingItemId || undefined,
-    locationCode: task.locationCode,
-    locationId:   task.locationId || undefined,
-    inKey:        task.locationId || undefined,
-    productSku:   task.sku,
-    qty:          pickedQty,
+    shippingItemId:  task.shippingItemId || undefined,
+    pickingId:       task.shippingItemId || undefined,
+    locationCode:    task.locationCode,
+    locationId:      task.locationId || undefined,
+    inKey:           task.locationId || undefined,
+    productSku:      task.sku,
+    qty:             pickedQty,
     pickedQty,
     unit,
-    lotNo:        task.lotNo || undefined,
-    expireDate:   task.expireDate || undefined,
-    itemCondition: task.itemCondition || undefined,
+    lotNo:           task.lotNo || undefined,
+    expireDate:      task.expireDate || undefined,
+    itemCondition:   task.itemCondition || undefined,
   };
 
   const endpoints = [

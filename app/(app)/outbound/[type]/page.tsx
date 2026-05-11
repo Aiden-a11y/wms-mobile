@@ -2,7 +2,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { authHeaders } from "@/lib/api";
-import { buildPickList, savePickList, loadPickList } from "@/lib/picking";
+import { buildPickList, savePickList, loadPickList, clearPickList } from "@/lib/picking";
 import { ChevronLeft, RefreshCw, Search, AlertCircle, ScanLine, Loader2 } from "lucide-react";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -82,68 +82,36 @@ export default function OrderListPage() {
     setBuilding(trimmed);
     setError("");
 
-    // Use cached pick list if available
-    const cached = loadPickList(trimmed);
-    if (cached && cached.length > 0) {
-      const nextIdx = cached.findIndex((t) => t.status === "pending");
-      if (nextIdx >= 0) {
-        router.push(`/outbound/${type}/${trimmed}/pick/${nextIdx}`);
-      } else {
-        router.push(`/outbound/${type}/${trimmed}/complete`);
-      }
-      setBuilding(null);
-      return;
-    }
+    // 항상 최신 picking 라인을 WMS에서 새로 조회 (assign이 바뀔 수 있으므로 캐시 무시)
+    clearPickList(trimmed);
 
     try {
-      // 1. customerCode 확보: hint → 오더 목록 검색 → detail 조회
+      // 1. customerCode 확보: hint → 오더 목록 검색
       let custCode = custCodeHint ?? "";
-      let detailData: Record<string, unknown> = {};
-
       if (!custCode) {
-        // 현재 목록에서 먼저 검색
         const found = orders.find((o) => {
           const c = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
           return c === trimmed;
         });
-        if (found) {
-          custCode = String(found.customerCode ?? found.custCode ?? "");
-        }
+        if (found) custCode = String(found.customerCode ?? found.custCode ?? "");
       }
 
-      if (!custCode) {
-        // detail 엔드포인트 시도
-        for (const ep of [
-          `/api/wms/shipping/${type}/${trimmed}`,
-          `/api/wms/shipping/detail/${trimmed}`,
-          `/api/wms/outbound/${type}/${trimmed}`,
-        ]) {
-          try {
-            const r = await fetch(ep, { headers: authHeaders() });
-            const j = await r.json().catch(() => null);
-            if (!j) continue;
-            const d = (j?.data ?? j) as Record<string, unknown>;
-            if (d && typeof d === "object" && !Array.isArray(d)) {
-              detailData = d;
-              const c = String(d.customerCode ?? d.custCode ?? d.consignorCode ?? "");
-              if (c) { custCode = c; break; }
-            }
-          } catch { /* try next */ }
-        }
-      }
-
-      // 2. 아이템 엔드포인트 시도
+      // 2. Picking 라인 우선 조회 (대시보드 Picking 탭 = 이미 assign된 로케이션)
       let rawItems: unknown[] = [];
-      for (const ep of [
-        `/api/wms/shipping/${type}/items/${trimmed}`,
-        `/api/wms/shipping/items/${trimmed}`,
-      ]) {
+
+      const pickingEndpoints = [
+        `/api/wms/shipping/${type}/picking/${trimmed}`,
+        `/api/wms/shipping/picking/${trimmed}`,
+        `/api/wms/outbound/${type}/picking/${trimmed}`,
+        `/api/wms/outbound/picking/${trimmed}`,
+      ];
+      for (const ep of pickingEndpoints) {
         try {
           const r = await fetch(ep, { headers: authHeaders() });
           const j = await r.json().catch(() => null);
           const list =
-            j?.data?.items ?? j?.data?.list ?? j?.data ??
-            j?.items ?? j?.list ?? (Array.isArray(j) ? j : null);
+            j?.data?.list ?? j?.data?.items ?? j?.data ??
+            j?.list ?? j?.items ?? (Array.isArray(j) ? j : null);
           if (r.ok && Array.isArray(list) && list.length > 0) {
             rawItems = list;
             break;
@@ -151,15 +119,27 @@ export default function OrderListPage() {
         } catch { /* try next */ }
       }
 
-      // 3. detail 안에 인라인 아이템이 있으면 활용
-      if (rawItems.length === 0 && Object.keys(detailData).length > 0) {
-        const inline =
-          detailData.itemList ?? detailData.items ??
-          detailData.shippingItemList ?? detailData.orderItems;
-        if (Array.isArray(inline) && inline.length > 0) rawItems = inline;
+      // 3. Picking 라인 없으면 items 엔드포인트 폴백
+      if (rawItems.length === 0) {
+        for (const ep of [
+          `/api/wms/shipping/${type}/items/${trimmed}`,
+          `/api/wms/shipping/items/${trimmed}`,
+        ]) {
+          try {
+            const r = await fetch(ep, { headers: authHeaders() });
+            const j = await r.json().catch(() => null);
+            const list =
+              j?.data?.items ?? j?.data?.list ?? j?.data ??
+              j?.items ?? j?.list ?? (Array.isArray(j) ? j : null);
+            if (r.ok && Array.isArray(list) && list.length > 0) {
+              rawItems = list;
+              break;
+            }
+          } catch { /* try next */ }
+        }
       }
 
-      // 4. 아이템이 없으면 detail을 다시 시도하며 인라인 아이템 추출
+      // 4. 그래도 없으면 detail 내 인라인 아이템
       if (rawItems.length === 0) {
         for (const ep of [
           `/api/wms/shipping/${type}/${trimmed}`,
@@ -169,18 +149,15 @@ export default function OrderListPage() {
             const r = await fetch(ep, { headers: authHeaders() });
             const j = await r.json().catch(() => null);
             const d = (j?.data ?? j) as Record<string, unknown>;
-            const inline = d?.itemList ?? d?.items ?? d?.shippingItemList ?? d?.orderItems;
-            if (Array.isArray(inline) && inline.length > 0) {
-              rawItems = inline;
-              if (!custCode) custCode = String(d.customerCode ?? d.custCode ?? "");
-              break;
-            }
+            if (!custCode) custCode = String(d?.customerCode ?? d?.custCode ?? "");
+            const inline = d?.pickingList ?? d?.pickList ?? d?.itemList ?? d?.items ?? d?.shippingItemList ?? d?.orderItems;
+            if (Array.isArray(inline) && inline.length > 0) { rawItems = inline; break; }
           } catch { /* try next */ }
         }
       }
 
       if (rawItems.length === 0) {
-        setError(`오더 아이템을 찾을 수 없습니다 (코드: ${trimmed})`);
+        setError(`피킹 라인을 찾을 수 없습니다 (코드: ${trimmed})`);
         setBuilding(null);
         return;
       }
