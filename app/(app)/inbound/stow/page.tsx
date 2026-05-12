@@ -143,40 +143,35 @@ function StowFlowInner() {
       const res = await fetch(`/api/wms/warehouse/location-search?${params}`, { headers: authHeaders() });
       const json = await res.json().catch(() => null);
 
-      let loc: LocationInfo | null = null;
-      if (res.ok && json) {
-        const d = (json?.data ?? json?.list?.[0] ?? json?.[0] ?? json) as Record<string, unknown>;
-        if (d && (d.zoneName || d.locationCode || d.locationId)) {
-          loc = {
-            locationCode: String(d.locationCode ?? d.code ?? raw),
-            locationId: String(d.locationId ?? d.id ?? ""),
-            zoneName: String(d.zoneName ?? d.zone ?? ""),
-            aisleName: String(d.aisleName ?? d.aisle ?? ""),
-            bayName: String(d.bayName ?? d.bay ?? ""),
-            levelName: String(d.levelName ?? d.level ?? ""),
-            positionName: String(d.positionName ?? d.position ?? ""),
-          };
-        }
+      if (!res.ok) {
+        setLocError(`Location API error ${res.status}: ${json?.message ?? JSON.stringify(json)}`);
+        setLocLoading(false);
+        return;
       }
 
-      // Fallback: parse barcode like "01-A-03-02-01"
-      if (!loc) {
-        const parts = raw.split(/[-_/]/);
-        if (parts.length >= 2) {
-          loc = {
-            locationCode: raw,
-            locationId: "",
-            zoneName: parts[0] ?? "",
-            aisleName: parts[1] ?? "",
-            bayName: parts[2] ?? "",
-            levelName: parts[3] ?? "",
-            positionName: parts[4] ?? "",
-          };
-        } else {
-          // Single-part barcode — use as-is
-          loc = { locationCode: raw, locationId: "", zoneName: "", aisleName: "", bayName: "", levelName: "", positionName: "" };
-        }
+      // Try multiple response shapes
+      const d = (json?.data ?? json?.list?.[0] ?? json?.[0] ?? json) as Record<string, unknown>;
+      const locationId = String(d?.locationId ?? d?.id ?? d?.locationCd ?? "");
+      const locationCode = String(d?.locationCode ?? d?.code ?? d?.name ?? raw);
+
+      if (!locationId) {
+        // API returned OK but no locationId — show the raw response for debugging
+        setLocError(
+          `Location "${raw}" not found or no ID returned.\nAPI response: ${JSON.stringify(json).slice(0, 200)}`
+        );
+        setLocLoading(false);
+        return;
       }
+
+      const loc: LocationInfo = {
+        locationCode,
+        locationId,
+        zoneName: String(d?.zoneName ?? d?.zone ?? ""),
+        aisleName: String(d?.aisleName ?? d?.aisle ?? ""),
+        bayName: String(d?.bayName ?? d?.bay ?? ""),
+        levelName: String(d?.levelName ?? d?.level ?? ""),
+        positionName: String(d?.positionName ?? d?.position ?? ""),
+      };
 
       setLocation(loc);
       setLocScan("");
@@ -433,9 +428,8 @@ function StowFlowInner() {
                 <p className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Location</p>
               </div>
               <p className="text-xl font-bold font-mono text-white">{locLabel(location)}</p>
-              {location.locationCode !== locLabel(location) && (
-                <p className="text-xs text-slate-500 mt-1 font-mono">{location.locationCode}</p>
-              )}
+              <p className="text-xs text-slate-500 mt-1 font-mono">code: {location.locationCode}</p>
+              <p className="text-xs text-slate-500 font-mono">id: {location.locationId || "(empty — will fail)"}</p>
             </div>
 
             <div className="rounded-2xl p-4 space-y-3"
