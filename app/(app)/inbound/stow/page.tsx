@@ -114,12 +114,40 @@ function StowFlowInner() {
           return;
         }
         const all: PersistedStowTag[] = Array.isArray(json) ? json : [];
-        const found = all.find((t) => String(t.id) === tagId);
+        let found = all.find((t) => String(t.id) === tagId);
         if (!found) {
           setLoadError(`Tag ID ${tagId} not found in pending tags (${all.length} total loaded).`);
           setLoadingTag(false);
           return;
         }
+
+        // If tag is missing customerCode or warehouseCd, fetch from Spider WMS
+        if (!found.customerCode || !found.warehouseCd) {
+          try {
+            const headers = authHeaders();
+            const orderRes = await fetch(
+              `/api/wms/receiving/items/${found.orderCode}`,
+              { headers }
+            );
+            const orderJson = await orderRes.json().catch(() => null);
+            const items: Record<string, unknown>[] =
+              Array.isArray(orderJson?.data?.items) ? orderJson.data.items :
+              Array.isArray(orderJson?.data?.list)  ? orderJson.data.list  :
+              Array.isArray(orderJson?.data)        ? orderJson.data       : [];
+            const item = items.find(
+              (r) => Number(r.receiveItemId ?? r.itemId) === found!.receiveItemId
+            ) ?? items[0];
+            if (item) {
+              found = {
+                ...found,
+                customerCode: found.customerCode || String(item.customerCode ?? ""),
+                warehouseCode: found.warehouseCode || String(item.warehouseCode ?? "STOO1"),
+                warehouseCd:   found.warehouseCd   || String(item.warehouseCd  ?? item.warehouseId ?? ""),
+              };
+            }
+          } catch { /* ignore — proceed with partial data */ }
+        }
+
         setTag(found);
         setQty(found.qty);
       } catch (e) {
@@ -193,8 +221,10 @@ function StowFlowInner() {
         positionName,
       };
 
-      rawScanRef.current = raw; // always keep raw barcode as backup
+      rawScanRef.current = raw;
       locationRef.current = loc;
+      // Persist to sessionStorage so re-mounts / stale closures can't lose it
+      sessionStorage.setItem("stow_loc", JSON.stringify(loc));
       setLocation(loc);
       setLocScan("");
       setStep("confirm");
