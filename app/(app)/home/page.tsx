@@ -7,7 +7,7 @@ import { PackageOpen, Truck, Boxes, LogOut } from "lucide-react";
 const MODULES = [
   {
     label: "Inbound",
-    sub: "Receiving · Stow Tag",
+    sub: "Stow Process",
     icon: PackageOpen,
     href: "/inbound",
     color: "#3B82F6",
