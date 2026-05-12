@@ -7,7 +7,7 @@ import { PackageOpen, Truck, Boxes, LogOut } from "lucide-react";
 const MODULES = [
   {
     label: "Inbound",
-    sub: "입고 처리",
+    sub: "입고 검수 · Stow Tag",
     icon: PackageOpen,
     href: "/inbound",
     color: "#3B82F6",
