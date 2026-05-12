@@ -110,7 +110,7 @@ export default function InboundPage() {
         <div className="rounded-2xl p-4" style={GLASS}>
           <div className="flex items-center gap-2 mb-3">
             <ScanLine className="w-4 h-4 text-blue-400" />
-            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider">Order Code 스캔</p>
+            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider">Scan Order Code</p>
           </div>
           <input
             ref={inputRef}
@@ -118,7 +118,7 @@ export default function InboundPage() {
             value={scan}
             onChange={(e) => { setScan(e.target.value); setScanError(""); }}
             onKeyDown={handleScan}
-            placeholder="바코드 스캔 또는 직접 입력..."
+            placeholder="Scan barcode or type..."
             autoFocus
             className="w-full bg-transparent border-0 border-b border-slate-600 focus:border-blue-500 outline-none text-white text-sm py-2 placeholder:text-slate-600 transition-colors"
           />
@@ -138,7 +138,7 @@ export default function InboundPage() {
           </div>
         ) : orders.length === 0 ? (
           <div className="text-center py-16">
-            <p className="text-slate-500 text-sm">활성 오더가 없습니다</p>
+            <p className="text-slate-500 text-sm">No active orders</p>
           </div>
         ) : (
           <div className="space-y-3">

@@ -263,7 +263,7 @@ export default function InboundInspectPage() {
                   {taggedQty} <span className="text-slate-500 text-sm">/ {orderQty}</span>
                 </p>
                 <p className={`text-xs mt-0.5 ${remainingQty <= 0 ? "text-green-400" : "text-amber-400"}`}>
-                  {remainingQty <= 0 ? "완료" : `${remainingQty} remaining`}
+                  {remainingQty <= 0 ? "Done" : `${remainingQty} remaining`}
                 </p>
               </div>
             </div>
@@ -338,7 +338,7 @@ export default function InboundInspectPage() {
           {/* Tag list */}
           {tags.length > 0 && (
             <div className="space-y-2">
-              <p className="text-xs text-slate-500 uppercase tracking-wide px-1">생성된 Stow Tags</p>
+              <p className="text-xs text-slate-500 uppercase tracking-wide px-1">Generated Stow Tags</p>
               {tags.map((tag) => (
                 <div
                   key={tag.id}

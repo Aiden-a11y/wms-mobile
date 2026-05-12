@@ -7,7 +7,7 @@ import { PackageOpen, Truck, Boxes, LogOut } from "lucide-react";
 const MODULES = [
   {
     label: "Inbound",
-    sub: "입고 검수 · Stow Tag",
+    sub: "Receiving · Stow Tag",
     icon: PackageOpen,
     href: "/inbound",
     color: "#3B82F6",
@@ -15,7 +15,7 @@ const MODULES = [
   },
   {
     label: "Outbound",
-    sub: "출고 / 피킹",
+    sub: "Outbound / Picking",
     icon: Truck,
     href: "/outbound",
     color: "#F59E0B",
@@ -23,7 +23,7 @@ const MODULES = [
   },
   {
     label: "Inventory",
-    sub: "재고 조회",
+    sub: "Inventory Lookup",
     icon: Boxes,
     href: "/inventory",
     color: "#14B8A6",
@@ -60,13 +60,13 @@ export default function HomePage() {
 
       {/* Greeting */}
       <div className="px-5 pb-8">
-        <p className="text-2xl font-bold text-white">안녕하세요, {displayName}님</p>
-        <p className="text-sm text-slate-400 mt-1">오늘도 안전하게 작업하세요</p>
+        <p className="text-2xl font-bold text-white">Hello, {displayName}</p>
+        <p className="text-sm text-slate-400 mt-1">Stay safe today</p>
       </div>
 
       {/* Modules */}
       <main className="flex-1 px-5 pb-8">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">메뉴</p>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Menu</p>
         <div className="space-y-3">
           {MODULES.map(({ label, sub, icon: Icon, href, color, bg }) => (
             <button

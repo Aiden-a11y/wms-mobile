@@ -61,12 +61,12 @@ export default function PickStepPage() {
         normalizeLoc(foundCode) !== normalizeLoc(task.locationCode) &&
         normalizeLoc(scanned)   !== normalizeLoc(task.locationCode)
       ) {
-        setError(`로케이션 불일치\n예상: ${task.locationCode}`);
+        setError(`Location mismatch\nExpected: ${task.locationCode}`);
         setScanInput(""); return;
       }
     } catch {
       if (normalizeLoc(scanned) !== normalizeLoc(task.locationCode)) {
-        setError(`로케이션 불일치\n예상: ${task.locationCode}`);
+        setError(`Location mismatch\nExpected: ${task.locationCode}`);
         setScanInput(""); return;
       }
     }
@@ -81,13 +81,13 @@ export default function PickStepPage() {
     if (scanned.toLowerCase() === task.sku.toLowerCase()) {
       setScanInput(""); setStep(3); return;
     }
-    setError(`상품 불일치\n예상 SKU: ${task.sku}`);
+    setError(`Item mismatch\nExpected SKU: ${task.sku}`);
     setScanInput("");
   }
 
   function handleStep3Confirm() {
     const q = parseInt(qtyInput, 10);
-    if (isNaN(q) || q <= 0) { setError("수량을 입력하세요"); return; }
+    if (isNaN(q) || q <= 0) { setError("Enter quantity"); return; }
     setError(""); setStep(4);
   }
 
@@ -105,7 +105,7 @@ export default function PickStepPage() {
     // 1. WMS API 피킹 확정 호출
     const result = await confirmPick(code, type, task, pickedQty, unit);
     if (!result.ok) {
-      setError(`피킹 확정 실패: ${result.message ?? "알 수 없는 오류"}`);
+      setError(`Pick confirmation failed: ${result.message ?? "Unknown error"}`);
       setConfirming(false);
       return;
     }
@@ -126,11 +126,11 @@ export default function PickStepPage() {
     }
   }
 
-  const STEPS = ["로케이션", "상품 스캔", "수량 확인", "단위 선택", "완료"];
+  const STEPS = ["Location", "Scan Item", "Confirm Qty", "Select Unit", "Done"];
 
   if (!task) return (
     <div className="min-h-screen flex items-center justify-center text-slate-500 text-sm" style={DARK_BG}>
-      태스크를 찾을 수 없습니다
+      Task not found
     </div>
   );
 
@@ -144,7 +144,7 @@ export default function PickStepPage() {
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3"
           style={{ background: "rgba(8,13,26,0.92)", backdropFilter: "blur(8px)" }}>
           <Loader2 className="w-10 h-10 text-blue-400 animate-spin" />
-          <p className="text-white font-semibold">피킹 확정 중…</p>
+          <p className="text-white font-semibold">Confirming pick…</p>
         </div>
       )}
 
@@ -154,7 +154,7 @@ export default function PickStepPage() {
           <ChevronLeft className="w-6 h-6" />
         </button>
         <div className="flex-1">
-          <p className="text-sm font-bold text-white">피킹 {idx + 1}</p>
+          <p className="text-sm font-bold text-white">Pick {idx + 1}</p>
           <p className="text-xs text-slate-400 font-mono">{task.sku}</p>
         </div>
         <div className="text-right">
@@ -200,7 +200,7 @@ export default function PickStepPage() {
         {step === 1 && (
           <div className="flex flex-col gap-5 flex-1">
             <div className="rounded-2xl p-5 text-center" style={CARD}>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">목표 로케이션</p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Target Location</p>
               <div className="flex items-center justify-center gap-2 mb-2">
                 <MapPin className="w-5 h-5 text-blue-400" />
                 <p className="text-2xl font-bold font-mono text-white tracking-wider">
@@ -216,12 +216,12 @@ export default function PickStepPage() {
             </div>
             <div className="rounded-2xl p-4 text-center" style={BLUE_BOX}>
               <ScanLine className="w-8 h-8 text-blue-400 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-blue-300">로케이션 바코드를 스캔하세요</p>
+              <p className="text-sm font-semibold text-blue-300">Scan location barcode</p>
             </div>
             <input ref={inputRef} type="text" value={scanInput}
               onChange={(e) => { setScanInput(e.target.value); setError(""); }}
               onKeyDown={(e) => e.key === "Enter" && handleStep1Scan()}
-              placeholder="스캔 또는 입력 후 Enter"
+              placeholder="Scan or type + Enter"
               className="w-full h-14 rounded-2xl px-4 text-center text-base text-white placeholder-slate-500 focus:outline-none"
               style={INPUT_STYLE}
             />
@@ -232,21 +232,21 @@ export default function PickStepPage() {
         {step === 2 && (
           <div className="flex flex-col gap-5 flex-1">
             <div className="rounded-2xl p-5" style={CARD}>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">상품 정보</p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Item Info</p>
               <p className="text-base font-semibold text-white mb-1">{task.productName}</p>
               <p className="text-sm font-mono text-slate-400">SKU: {task.sku}</p>
               {task.itemCondition && task.itemCondition !== "GOOD" && (
-                <p className="text-xs text-amber-400 mt-1">상태: {task.itemCondition}</p>
+                <p className="text-xs text-amber-400 mt-1">Condition: {task.itemCondition}</p>
               )}
             </div>
             <div className="rounded-2xl p-4 text-center" style={BLUE_BOX}>
               <ScanLine className="w-8 h-8 text-blue-400 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-blue-300">상품 바코드를 스캔하세요</p>
+              <p className="text-sm font-semibold text-blue-300">Scan item barcode</p>
             </div>
             <input ref={inputRef} type="text" value={scanInput}
               onChange={(e) => { setScanInput(e.target.value); setError(""); }}
               onKeyDown={(e) => e.key === "Enter" && handleStep2Scan()}
-              placeholder="바코드 스캔 또는 입력 후 Enter"
+              placeholder="Scan barcode or type + Enter"
               className="w-full h-14 rounded-2xl px-4 text-center text-base text-white placeholder-slate-500 focus:outline-none"
               style={INPUT_STYLE}
             />
@@ -257,12 +257,12 @@ export default function PickStepPage() {
         {step === 3 && (
           <div className="flex flex-col gap-5 flex-1">
             <div className="rounded-2xl p-5 text-center" style={CARD}>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">할당 수량</p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Allocated Qty</p>
               <p className="text-5xl font-bold text-white">{task.allocatedQty}</p>
-              <p className="text-sm text-slate-400 mt-1">실제 수량을 확인 후 입력하세요</p>
+              <p className="text-sm text-slate-400 mt-1">Verify and enter actual quantity</p>
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide block mb-2">실제 피킹 수량</label>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide block mb-2">Actual Pick Qty</label>
               <input ref={inputRef} type="number" value={qtyInput}
                 onChange={(e) => { setQtyInput(e.target.value); setError(""); }}
                 onKeyDown={(e) => e.key === "Enter" && handleStep3Confirm()}
@@ -273,7 +273,7 @@ export default function PickStepPage() {
             </div>
             <button onClick={handleStep3Confirm}
               className="w-full h-14 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-2xl text-base transition-colors">
-              확인
+              Confirm
             </button>
           </div>
         )}
@@ -282,8 +282,8 @@ export default function PickStepPage() {
         {step === 4 && (
           <div className="flex flex-col gap-5 flex-1">
             <div className="rounded-2xl p-5 text-center" style={CARD}>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">피킹 단위 선택</p>
-              <p className="text-sm text-slate-300">수량: <strong className="text-white">{qtyInput}</strong></p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Select Unit</p>
+              <p className="text-sm text-slate-300">Qty: <strong className="text-white">{qtyInput}</strong></p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               {(["EA", "CARTON"] as const).map((u) => (
@@ -291,7 +291,7 @@ export default function PickStepPage() {
                   className="h-24 rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-all"
                   style={CARD}>
                   <p className="text-2xl font-bold text-white">{u}</p>
-                  <p className="text-xs text-slate-400">{u === "EA" ? "낱개" : "박스/카톤"}</p>
+                  <p className="text-xs text-slate-400">{u === "EA" ? "Each" : "Box/Carton"}</p>
                 </button>
               ))}
             </div>
@@ -305,13 +305,13 @@ export default function PickStepPage() {
               <div className="flex items-center gap-3 mb-4">
                 <CheckCircle2 className="w-8 h-8 text-green-400 flex-shrink-0" />
                 <div>
-                  <p className="text-base font-semibold text-green-300">피킹 준비 완료</p>
-                  <p className="text-xs text-slate-400">아래 내용을 확인하고 확정하세요</p>
+                  <p className="text-base font-semibold text-green-300">Ready to Confirm</p>
+                  <p className="text-xs text-slate-400">Review and confirm below</p>
                 </div>
               </div>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">로케이션</span>
+                  <span className="text-slate-400">Location</span>
                   <span className="font-mono font-semibold text-white">{locParts.join(" / ")}</span>
                 </div>
                 <div className="flex justify-between">
@@ -319,7 +319,7 @@ export default function PickStepPage() {
                   <span className="font-mono text-white">{task.sku}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">수량</span>
+                  <span className="text-slate-400">Qty</span>
                   <span className="font-semibold text-white">{qtyInput} {unit}</span>
                 </div>
                 {task.lotNo && (
@@ -333,7 +333,7 @@ export default function PickStepPage() {
             <button onClick={handleComplete} disabled={confirming}
               className="w-full h-14 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-semibold rounded-2xl text-base transition-colors flex items-center justify-center gap-2">
               {confirming ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
-              피킹 확정
+              Confirm Pick
             </button>
           </div>
         )}

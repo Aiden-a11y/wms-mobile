@@ -113,14 +113,14 @@ export default function InboundOrderPage() {
         <div className="rounded-2xl p-4" style={GLASS}>
           <div className="flex items-center gap-2 mb-3">
             <ScanLine className="w-4 h-4 text-blue-400" />
-            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider">SKU 스캔</p>
+            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider">Scan SKU</p>
           </div>
           <input
             type="text"
             value={scan}
             onChange={(e) => { setScan(e.target.value); setScanError(""); }}
             onKeyDown={(e) => { if (e.key === "Enter") navigateToItem(scan.trim()); }}
-            placeholder="SKU 바코드 스캔..."
+            placeholder="Scan SKU barcode..."
             autoFocus
             className="w-full bg-transparent border-0 border-b border-slate-600 focus:border-blue-500 outline-none text-white text-sm py-2 placeholder:text-slate-600"
           />
@@ -154,8 +154,8 @@ export default function InboundOrderPage() {
             style={{ background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)" }}>
             <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0" />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-green-300">모든 아이템 완료</p>
-              <p className="text-xs text-green-500 mt-0.5">Stow 프로세스로 이동하세요</p>
+              <p className="text-sm font-semibold text-green-300">All items complete</p>
+              <p className="text-xs text-green-500 mt-0.5">Proceed to stow process</p>
             </div>
           </div>
         )}

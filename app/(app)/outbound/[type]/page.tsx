@@ -157,7 +157,7 @@ export default function OrderListPage() {
       }
 
       if (rawItems.length === 0) {
-        setError(`피킹 라인을 찾을 수 없습니다 (코드: ${trimmed})`);
+        setError(`No picking lines found (code: ${trimmed})`);
         setBuilding(null);
         return;
       }
@@ -175,10 +175,10 @@ export default function OrderListPage() {
         });
         const invJson = await invRes.json().catch(() => null);
         setError(
-          `재고 로케이션 없음\n` +
-          `custCode=${custCode || "(없음)"} sku=${sampleSku}\n` +
-          `[재고응답] ${JSON.stringify(invJson).slice(0, 300)}\n` +
-          `[아이템키] ${Object.keys(firstItem).join(", ")}`
+          `No inventory location\n` +
+          `custCode=${custCode || "(none)"} sku=${sampleSku}\n` +
+          `[Inventory Response] ${JSON.stringify(invJson).slice(0, 300)}\n` +
+          `[Item Keys] ${Object.keys(firstItem).join(", ")}`
         );
         setBuilding(null);
         return;
@@ -188,7 +188,7 @@ export default function OrderListPage() {
       const nextIdx = list.findIndex((t) => t.status === "pending");
       router.push(`/outbound/${type}/${trimmed}/pick/${nextIdx >= 0 ? nextIdx : 0}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "피킹 목록 구성 실패");
+      setError(err instanceof Error ? err.message : "Failed to build pick list");
       setBuilding(null);
     }
   }
@@ -208,7 +208,7 @@ export default function OrderListPage() {
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4"
           style={{ background: "rgba(8,13,26,0.92)", backdropFilter: "blur(8px)" }}>
           <Loader2 className="w-10 h-10 text-blue-400 animate-spin" />
-          <p className="text-white font-semibold text-base">피킹 목록 구성 중…</p>
+          <p className="text-white font-semibold text-base">Building pick list…</p>
           <p className="text-slate-400 font-mono text-sm">{building}</p>
         </div>
       )}
@@ -219,7 +219,7 @@ export default function OrderListPage() {
         </button>
         <div className="flex-1">
           <p className="text-base font-bold text-white">{typeLabel} Picking</p>
-          <p className="text-xs text-slate-400">피킹 주문 목록</p>
+          <p className="text-xs text-slate-400">Picking orders</p>
         </div>
         <button onClick={() => load()} disabled={loading} className="p-2 text-slate-400 active:text-white transition-colors">
           <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
@@ -241,7 +241,7 @@ export default function OrderListPage() {
                 setScanInput("");
               }
             }}
-            placeholder="오더코드 스캔 또는 입력 후 Enter"
+            placeholder="Scan order code or type + Enter"
             className="w-full h-11 rounded-xl pl-9 pr-3 text-sm text-white placeholder-slate-500 focus:outline-none"
             style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.35)" }}
           />
@@ -251,7 +251,7 @@ export default function OrderListPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
           <input
             type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="목록 검색…"
+            placeholder="Search orders…"
             className="w-full h-9 rounded-xl pl-9 pr-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
           />
@@ -275,7 +275,7 @@ export default function OrderListPage() {
         )}
         {!loading && filtered.length === 0 && !error && (
           <div className="text-center py-20 text-slate-500">
-            <p className="text-sm">주문이 없습니다</p>
+            <p className="text-sm">No orders found</p>
           </div>
         )}
         <div className="space-y-3">
@@ -301,8 +301,8 @@ export default function OrderListPage() {
                 </div>
                 <p className="text-sm text-slate-300 mb-1">{customer}</p>
                 <div className="flex items-center gap-4 text-xs text-slate-500">
-                  <span>수량 {qty}</span>
-                  <span>주문일 {date}</span>
+                  <span>Qty {qty}</span>
+                  <span>Date {date}</span>
                 </div>
               </button>
             );

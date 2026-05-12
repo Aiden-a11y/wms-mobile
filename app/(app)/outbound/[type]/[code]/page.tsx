@@ -41,11 +41,11 @@ export default function OrderDetailPage() {
 
       const list = await buildPickList(rawItems as Record<string, unknown>[], WAREHOUSE_CODE, custCode);
 
-      if (list.length === 0) setError("피킹 아이템이 없거나 재고 로케이션을 찾을 수 없습니다.");
+      if (list.length === 0) setError("No picking items or inventory locations found.");
       savePickList(code, list);
       setTasks(list);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "오더 로드 실패");
+      setError(err instanceof Error ? err.message : "Failed to load order");
     }
     setLoading(false);
   }
@@ -70,7 +70,7 @@ export default function OrderDetailPage() {
         </button>
         <div className="flex-1 min-w-0">
           <p className="text-base font-bold text-white truncate">{code}</p>
-          <p className="text-xs text-slate-400">피킹 목록</p>
+          <p className="text-xs text-slate-400">Pick List</p>
         </div>
         <button onClick={rebuild} disabled={loading} className="p-2 text-slate-400 active:text-white transition-colors">
           <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
@@ -81,7 +81,7 @@ export default function OrderDetailPage() {
       {!loading && total > 0 && (
         <div className="px-5 py-3" style={HDR_BORDER}>
           <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
-            <span>{done} / {total} 완료</span>
+            <span>{done} / {total} done</span>
             <span className="font-semibold text-blue-400">{pct}%</span>
           </div>
           <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.1)" }}>
@@ -94,7 +94,7 @@ export default function OrderDetailPage() {
         {loading && (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-500">
             <RefreshCw className="w-8 h-8 animate-spin" />
-            <p className="text-sm">로케이션 자동 할당 중…</p>
+            <p className="text-sm">Assigning locations…</p>
           </div>
         )}
 
@@ -141,12 +141,12 @@ export default function OrderDetailPage() {
           {done === total ? (
             <button onClick={() => router.push(`/outbound/${type}/${code}/complete`)}
               className="w-full h-14 bg-green-600 hover:bg-green-500 text-white font-semibold rounded-2xl text-base transition-colors">
-              패킹존 스캔 →
+              Scan Packing Zone →
             </button>
           ) : (
             <button onClick={() => nextIdx >= 0 && router.push(`/outbound/${type}/${code}/pick/${nextIdx}`)}
               className="w-full h-14 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-2xl text-base transition-colors">
-              피킹 시작 ({nextIdx + 1}번 로케이션)
+              Start Picking (Location {nextIdx + 1})
             </button>
           )}
         </div>

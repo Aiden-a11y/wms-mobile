@@ -17,8 +17,8 @@ export default function InventoryPage() {
       </header>
       <main className="flex-1 flex flex-col items-center justify-center gap-4 p-6">
         <Construction className="w-12 h-12 text-slate-500" />
-        <p className="text-base font-semibold text-slate-300">준비 중</p>
-        <p className="text-sm text-center text-slate-500">Inventory 조회 기능은 추후 구현 예정입니다</p>
+        <p className="text-base font-semibold text-slate-300">Coming Soon</p>
+        <p className="text-sm text-center text-slate-500">Inventory lookup coming soon</p>
       </main>
     </div>
   );

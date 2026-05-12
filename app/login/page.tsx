@@ -23,11 +23,11 @@ export default function LoginPage() {
       const json = await res.json();
       const d = json?.data ?? json;
       const token = d?.token ?? d?.accessToken ?? d?.access_token;
-      if (!res.ok || !token) throw new Error(json?.message ?? "아이디 또는 비밀번호를 확인하세요");
+      if (!res.ok || !token) throw new Error(json?.message ?? "Invalid username or password");
       setAuth({ userId, token, name: d?.name ?? d?.userName ?? userId });
       router.replace("/home");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "로그인 실패");
+      setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setLoading(false);
     }

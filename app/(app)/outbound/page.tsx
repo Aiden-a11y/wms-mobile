@@ -23,7 +23,7 @@ export default function OutboundPage() {
         </button>
         <div>
           <p className="text-base font-bold text-white">Outbound</p>
-          <p className="text-xs text-slate-400">출고 타입 선택</p>
+          <p className="text-xs text-slate-400">Select outbound type</p>
         </div>
       </header>
 
