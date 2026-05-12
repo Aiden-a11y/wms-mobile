@@ -156,21 +156,20 @@ function StowFlowInner() {
         return;
       }
 
-      // Response shape: { data: [{warehouseCd, zoneName, aisleName, bayName, levelName, positionName}] }
+      // Response: { data: [{warehouseCd, zoneName, aisleName, bayName, levelName, positionName}] }
       const dataRaw = json?.data;
-      const d = (Array.isArray(dataRaw) ? dataRaw[0] : dataRaw) as Record<string, unknown> | undefined;
+      const d = (Array.isArray(dataRaw) ? dataRaw[0] : dataRaw) as Record<string, unknown> | null ?? null;
 
-      // No data at all
-      if (!d || (!d.zoneName && !d.locationCode && !d.locationId)) {
-        setLocError(
-          `Location "${raw}" not found (wc="${wc}"). API: ${JSON.stringify(json).slice(0, 200)}`
-        );
+      if (!d) {
+        setLocError(`Location "${raw}" not found. API: ${JSON.stringify(json).slice(0, 200)}`);
         setLocLoading(false);
         return;
       }
 
-      const locationId = String(d?.locationId ?? d?.id ?? d?.warehouseCd ?? "");
-      const locationCode = String(d?.locationCode ?? d?.code ?? raw);
+      // locationId: prefer explicit field, fallback to warehouseCd (Spider WMS omits it sometimes)
+      const locationId = String(d.locationId ?? d.id ?? d.warehouseCd ?? "");
+      // locationCode: prefer explicit field, fallback to scanned barcode
+      const locationCode = String(d.locationCode ?? d.code ?? raw);
 
       const loc: LocationInfo = {
         locationCode,
