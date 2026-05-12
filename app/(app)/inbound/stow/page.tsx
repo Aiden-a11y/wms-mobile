@@ -139,17 +139,9 @@ function StowFlowInner() {
     setLocLoading(true);
     setLocError("");
     try {
-      // Try POST first (Spider WMS requires POST for location search)
-      let res = await fetch(`/api/wms/warehouse/location-search`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ locationCode: raw, warehouseCode: tag.warehouseCode, q: raw }),
-      });
-      // Fallback to GET if POST not supported
-      if (res.status === 405) {
-        const params = new URLSearchParams({ q: raw, warehouseCode: tag.warehouseCode });
-        res = await fetch(`/api/wms/warehouse/location-search?${params}`, { headers: authHeaders() });
-      }
+      // Use GET with query params — same as dashboard (POST returns empty data)
+      const params = new URLSearchParams({ q: raw, warehouseCode: tag.warehouseCode ?? "" });
+      const res = await fetch(`/api/wms/warehouse/location-search?${params}`, { headers: authHeaders() });
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
