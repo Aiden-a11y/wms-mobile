@@ -85,6 +85,7 @@ function StowFlowInner() {
   const [qty, setQty] = useState(0);
   const [location, setLocation] = useState<LocationInfo | null>(null);
   const locationRef = useRef<LocationInfo | null>(null); // survives re-renders
+  const rawScanRef = useRef<string>(""); // raw barcode, always set before state updates
   const [locScan, setLocScan] = useState("");
   const [locLoading, setLocLoading] = useState(false);
   const [locError, setLocError] = useState("");
@@ -167,21 +168,32 @@ function StowFlowInner() {
         return;
       }
 
-      // locationId: prefer explicit field, fallback to warehouseCd (Spider WMS omits it sometimes)
-      const locationId = String(d.locationId ?? d.id ?? d.warehouseCd ?? "");
-      // locationCode: prefer explicit field, fallback to scanned barcode
-      const locationCode = String(d.locationCode ?? d.code ?? raw);
+      const zoneName    = String(d.zoneName    ?? d.zone     ?? "");
+      const aisleName   = String(d.aisleName   ?? d.aisle    ?? "");
+      const bayName     = String(d.bayName     ?? d.bay      ?? "");
+      const levelName   = String(d.levelName   ?? d.level    ?? "");
+      const positionName= String(d.positionName ?? d.position ?? "");
+
+      // locationCode: use zone/aisle/bay/level/position if available (matches dashboard display)
+      // fallback to explicit API field, then raw barcode
+      const locationCode = String(
+        d.locationCode ?? d.code ??
+        ([zoneName, aisleName, bayName, levelName, positionName].filter(Boolean).join(" / ") || raw)
+      );
+      // locationId: explicit field only (empty string is fine — Spider WMS uses locationCode)
+      const locationId = String(d.locationId ?? d.id ?? "");
 
       const loc: LocationInfo = {
         locationCode,
         locationId,
-        zoneName: String(d?.zoneName ?? d?.zone ?? ""),
-        aisleName: String(d?.aisleName ?? d?.aisle ?? ""),
-        bayName: String(d?.bayName ?? d?.bay ?? ""),
-        levelName: String(d?.levelName ?? d?.level ?? ""),
-        positionName: String(d?.positionName ?? d?.position ?? ""),
+        zoneName,
+        aisleName,
+        bayName,
+        levelName,
+        positionName,
       };
 
+      rawScanRef.current = raw; // always keep raw barcode as backup
       locationRef.current = loc;
       setLocation(loc);
       setLocScan("");
@@ -204,6 +216,10 @@ function StowFlowInner() {
       const expireDate = tag.expireDate?.replace(/-/g, "").slice(0, 8) ?? "";
       const wc = tag.warehouseCode || "STOO1";
 
+      // Guarantee locationCode is never empty — use raw barcode as last resort
+      const finalLocationCode = loc.locationCode || rawScanRef.current;
+      const finalLocationId   = loc.locationId || "";
+
       const payload = {
         receiveOrderCode: tag.orderCode,
         receiveItemId: tag.receiveItemId,
@@ -215,8 +231,8 @@ function StowFlowInner() {
         expireDate,
         itemCondition: tag.itemCondition ?? "GOOD",
         qty,
-        locationCode: loc.locationCode,
-        locationId: loc.locationId,
+        locationCode: finalLocationCode,
+        locationId: finalLocationId,
       };
 
       const res = await fetch("/api/wms/receiving/assign", {
