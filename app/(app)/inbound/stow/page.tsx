@@ -208,8 +208,9 @@ function StowFlowInner() {
         d.locationCode ?? d.code ??
         ([zoneName, aisleName, bayName, levelName, positionName].filter(Boolean).join(" / ") || raw)
       );
-      // locationId: explicit field only (empty string is fine — Spider WMS uses locationCode)
-      const locationId = String(d.locationId ?? d.id ?? "");
+      // locationId: only use if API explicitly returns one; empty string is correct
+      // (sending wrong ID like warehouseCd causes Spider WMS to fall back to warehouseCode)
+      const locationId = d.locationId != null ? String(d.locationId) : (d.id != null ? String(d.id) : "");
 
       const loc: LocationInfo = {
         locationCode,
@@ -252,9 +253,8 @@ function StowFlowInner() {
       const expireDate = tag.expireDate?.replace(/-/g, "").slice(0, 8) ?? "";
       const wc = tag.warehouseCode || "STOO1";
 
-      // Guarantee locationCode is never empty — use raw barcode as last resort
       const finalLocationCode = loc.locationCode || rawScanRef.current;
-      const finalLocationId   = loc.locationId || "";
+      const finalLocationId   = loc.locationId ?? ""; // empty string same as dashboard
 
       const payload = {
         receiveOrderCode: tag.orderCode,
