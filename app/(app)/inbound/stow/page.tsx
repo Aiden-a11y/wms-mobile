@@ -236,8 +236,14 @@ function StowFlowInner() {
 
   // ── Assign ───────────────────────────────────────────────
   async function handleAssign() {
-    // Use ref as source of truth — state may lag in closures
-    const loc = locationRef.current ?? location;
+    // Layer of fallbacks: ref → state → sessionStorage
+    let loc = locationRef.current ?? location;
+    if (!loc) {
+      try {
+        const stored = sessionStorage.getItem("stow_loc");
+        if (stored) loc = JSON.parse(stored) as LocationInfo;
+      } catch { /* ignore */ }
+    }
     if (!tag || !loc) return;
     setAssigning(true);
     setAssignError("");
