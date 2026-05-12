@@ -84,6 +84,7 @@ function StowFlowInner() {
   const [step, setStep] = useState<Step>("qty");
   const [qty, setQty] = useState(0);
   const [location, setLocation] = useState<LocationInfo | null>(null);
+  const locationRef = useRef<LocationInfo | null>(null); // survives re-renders
   const [locScan, setLocScan] = useState("");
   const [locLoading, setLocLoading] = useState(false);
   const [locError, setLocError] = useState("");
@@ -181,6 +182,7 @@ function StowFlowInner() {
         positionName: String(d?.positionName ?? d?.position ?? ""),
       };
 
+      locationRef.current = loc;
       setLocation(loc);
       setLocScan("");
       setStep("confirm");
@@ -192,26 +194,29 @@ function StowFlowInner() {
 
   // ── Assign ───────────────────────────────────────────────
   async function handleAssign() {
-    if (!tag || !location) return;
+    // Use ref as source of truth — state may lag in closures
+    const loc = locationRef.current ?? location;
+    if (!tag || !loc) return;
     setAssigning(true);
     setAssignError("");
     try {
       // Normalize expireDate to YYYYMMDD (API requires no dashes)
       const expireDate = tag.expireDate?.replace(/-/g, "").slice(0, 8) ?? "";
+      const wc = tag.warehouseCode || "STOO1";
 
       const payload = {
         receiveOrderCode: tag.orderCode,
         receiveItemId: tag.receiveItemId,
-        warehouseCode: tag.warehouseCode,
-        warehouseCd: tag.warehouseCd,
+        warehouseCode: wc,
+        warehouseCd: tag.warehouseCd || wc,
         customerCode: tag.customerCode,
         productSku: tag.sku,
-        lotNo: tag.lotNo,
+        lotNo: tag.lotNo ?? "",
         expireDate,
-        itemCondition: tag.itemCondition,
+        itemCondition: tag.itemCondition ?? "GOOD",
         qty,
-        locationCode: location.locationCode,
-        locationId: location.locationId,
+        locationCode: loc.locationCode,
+        locationId: loc.locationId,
       };
 
       const res = await fetch("/api/wms/receiving/assign", {
@@ -222,7 +227,10 @@ function StowFlowInner() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok || json?.isSuccess === false || json?.success === false) {
-        throw new Error(json?.message ?? json?.msg ?? `Assign failed (HTTP ${res.status})`);
+        throw new Error(
+          `${json?.message ?? json?.msg ?? `Assign failed (HTTP ${res.status})`}\n` +
+          `loc: ${loc.locationCode} / id: ${loc.locationId}`
+        );
       }
 
       // Mark stow tag as done in Redis
@@ -427,7 +435,7 @@ function StowFlowInner() {
         )}
 
         {/* ── CONFIRM ── */}
-        {step === "confirm" && location && (
+        {step === "confirm" && (() => { const loc = locationRef.current ?? location; return loc ? (
           <div className="space-y-3">
             <div className="rounded-2xl p-4"
               style={{ ...GLASS, border: "1px solid rgba(139,92,246,0.3)" }}>
@@ -435,9 +443,9 @@ function StowFlowInner() {
                 <MapPin className="w-4 h-4 text-purple-400" />
                 <p className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Location</p>
               </div>
-              <p className="text-xl font-bold font-mono text-white">{locLabel(location)}</p>
-              <p className="text-xs text-slate-500 mt-1 font-mono">code: {location.locationCode}</p>
-              <p className="text-xs text-slate-500 font-mono">id: {location.locationId || "(empty — will fail)"}</p>
+              <p className="text-xl font-bold font-mono text-white">{locLabel(loc)}</p>
+              <p className="text-xs text-slate-500 mt-1 font-mono">code: {loc.locationCode}</p>
+              <p className="text-xs text-slate-500 font-mono">id: {loc.locationId || "(empty)"}</p>
             </div>
 
             <div className="rounded-2xl p-4 space-y-3"
@@ -447,11 +455,11 @@ function StowFlowInner() {
                 <p className="text-xs font-semibold text-green-300 uppercase tracking-wider">Confirm Stow</p>
               </div>
               {[
-                ["SKU", tag.sku],
+                ["SKU", tag?.sku ?? ""],
                 ["Qty", String(qty)],
-                ["Location", locLabel(location)],
-                ...(tag.lotNo ? [["LOT", tag.lotNo]] : []),
-                ...(tag.expireDate ? [["EXP", tag.expireDate.slice(0, 10)]] : []),
+                ["Location", locLabel(loc)],
+                ...(tag?.lotNo ? [["LOT", tag.lotNo]] : []),
+                ...(tag?.expireDate ? [["EXP", tag.expireDate.slice(0, 10)]] : []),
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between text-sm">
                   <span className="text-slate-400">{k}</span>
@@ -481,7 +489,7 @@ function StowFlowInner() {
               </button>
             </div>
           </div>
-        )}
+        ) : null; })()}
       </main>
     </div>
   );
