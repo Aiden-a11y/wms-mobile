@@ -140,7 +140,7 @@ function StowFlowInner() {
     setLocError("");
     try {
       // POST with { search, warehouseCode } — confirmed correct from network capture
-      const wc = tag.warehouseCode || "STO01";   // fallback: only one warehouse
+      const wc = tag.warehouseCode || "STOO1";   // fallback: only one warehouse
       const body: Record<string, string> = { search: raw, warehouseCode: wc };
 
       const res = await fetch(`/api/wms/warehouse/location-search`, {
