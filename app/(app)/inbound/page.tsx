@@ -16,23 +16,34 @@ export default function StowListPage() {
   const router = useRouter();
   const [tags, setTags] = useState<PersistedStowTag[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [scan, setScan] = useState("");
   const [scanError, setScanError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function loadTags() {
     setLoading(true);
+    setError("");
     try {
       const res = await fetch("/api/stow-tags?pending=true");
-      if (res.ok) {
-        const data: PersistedStowTag[] = await res.json();
-        setTags(data);
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(`Server error ${res.status}: ${json?.error ?? "Failed to load stow tags"}`);
+        setLoading(false);
+        return;
       }
-    } catch {}
+      setTags(Array.isArray(json) ? json : []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
+    }
     setLoading(false);
   }
 
   useEffect(() => { loadTags(); }, []);
+
+  function goStow(tag: PersistedStowTag) {
+    router.push(`/inbound/stow?id=${tag.id}`);
+  }
 
   function handleScan() {
     const v = scan.trim();
@@ -41,15 +52,12 @@ export default function StowListPage() {
     const match = tags.find((t) => t.barcodeValue === v);
     if (match) {
       setScan("");
-      router.push(`/inbound/stow?id=${match.id}`);
+      goStow(match);
       return;
     }
-    // barcode not in local list → pass to stow page to try API
-    setScan("");
-    router.push(`/inbound/stow?barcode=${encodeURIComponent(v)}`);
+    setScanError(`"${v}" not found in pending tags`);
   }
 
-  // Group by orderCode
   const groups = tags.reduce<Record<string, PersistedStowTag[]>>((acc, tag) => {
     (acc[tag.orderCode] ??= []).push(tag);
     return acc;
@@ -68,6 +76,19 @@ export default function StowListPage() {
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-8 space-y-3 overflow-y-auto">
+        {/* Server error banner */}
+        {error && (
+          <div className="rounded-2xl p-4 flex items-start gap-3"
+            style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
+            <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-300">Failed to load tags</p>
+              <p className="text-xs text-red-400 mt-0.5">{error}</p>
+              <p className="text-xs text-red-500 mt-1">Check Vercel env vars: KV_REST_API_URL, KV_REST_API_TOKEN</p>
+            </div>
+          </div>
+        )}
+
         {/* Scan input */}
         <div className="rounded-2xl p-4" style={GLASS}>
           <div className="flex items-center gap-2 mb-3">
@@ -91,11 +112,13 @@ export default function StowListPage() {
           )}
         </div>
 
-        {/* Pending count badge */}
-        {!loading && tags.length > 0 && (
+        {/* Pending count */}
+        {!loading && !error && tags.length > 0 && (
           <div className="flex items-center gap-2 px-1">
             <Tag className="w-3.5 h-3.5 text-amber-400" />
-            <p className="text-xs font-semibold text-amber-400">{tags.length} pending tag{tags.length !== 1 ? "s" : ""}</p>
+            <p className="text-xs font-semibold text-amber-400">
+              {tags.length} pending tag{tags.length !== 1 ? "s" : ""}
+            </p>
           </div>
         )}
 
@@ -103,13 +126,14 @@ export default function StowListPage() {
         {loading && (
           <div className="space-y-3">
             {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-28 rounded-2xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+              <div key={i} className="h-28 rounded-2xl animate-pulse"
+                style={{ background: "rgba(255,255,255,0.04)" }} />
             ))}
           </div>
         )}
 
         {/* Empty */}
-        {!loading && tags.length === 0 && (
+        {!loading && !error && tags.length === 0 && (
           <div className="text-center py-16">
             <p className="text-slate-500 text-sm">No pending stow tags</p>
           </div>
@@ -118,7 +142,6 @@ export default function StowListPage() {
         {/* Tag groups */}
         {!loading && Object.entries(groups).map(([orderCode, orderTags]) => (
           <div key={orderCode} className="rounded-2xl overflow-hidden" style={GLASS}>
-            {/* Order header */}
             <div
               className="px-4 py-2.5 flex items-center gap-2"
               style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.04)" }}
@@ -129,8 +152,6 @@ export default function StowListPage() {
                 {orderTags.length} tag{orderTags.length !== 1 ? "s" : ""}
               </span>
             </div>
-
-            {/* Tags */}
             <div>
               {orderTags.map((tag, i) => (
                 <div
@@ -138,15 +159,12 @@ export default function StowListPage() {
                   className="flex items-center gap-3 px-4 py-3"
                   style={i < orderTags.length - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}
                 >
-                  {/* Tag number */}
                   <div
                     className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
                     style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)" }}
                   >
                     <span className="text-blue-300 font-bold text-xs">T{tag.tagNo}</span>
                   </div>
-
-                  {/* Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2">
                       <span className="font-mono text-sm font-bold text-white">{tag.sku}</span>
@@ -155,15 +173,11 @@ export default function StowListPage() {
                     <div className="flex gap-2 mt-0.5 text-xs text-slate-500">
                       {tag.lotNo && <span>LOT: {tag.lotNo}</span>}
                       {tag.expireDate && <span>EXP: {tag.expireDate.slice(0, 10)}</span>}
-                      {!tag.lotNo && !tag.expireDate && (
-                        <span className="truncate">{tag.productName}</span>
-                      )}
+                      {!tag.lotNo && !tag.expireDate && <span className="truncate">{tag.productName}</span>}
                     </div>
                   </div>
-
-                  {/* Stow button */}
                   <button
-                    onClick={() => router.push(`/inbound/stow?id=${tag.id}`)}
+                    onClick={() => goStow(tag)}
                     className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl flex-shrink-0 active:scale-95 transition-all"
                     style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)", color: "#93c5fd" }}
                   >
