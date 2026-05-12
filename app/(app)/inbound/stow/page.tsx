@@ -22,6 +22,7 @@ type Step = "qty" | "location" | "confirm" | "done";
 interface LocationInfo {
   locationCode: string;
   locationId: string;
+  warehouseCd: string;  // location's own warehouseCd from location-search API
   zoneName: string;
   aisleName: string;
   bayName: string;
@@ -190,6 +191,10 @@ function StowFlowInner() {
       const dataRaw = json?.data;
       const d = (Array.isArray(dataRaw) ? dataRaw[0] : dataRaw) as Record<string, unknown> | null ?? null;
 
+      // DEBUG: log full location-search response to console
+      console.log("[location-search] raw response:", JSON.stringify(json));
+      console.log("[location-search] first item (d):", JSON.stringify(d));
+
       if (!d) {
         setLocError(`Location "${raw}" not found. API: ${JSON.stringify(json).slice(0, 200)}`);
         setLocLoading(false);
@@ -208,13 +213,15 @@ function StowFlowInner() {
         d.locationCode ?? d.code ??
         ([zoneName, aisleName, bayName, levelName, positionName].filter(Boolean).join(" / ") || raw)
       );
-      // locationId: only use if API explicitly returns one; empty string is correct
-      // (sending wrong ID like warehouseCd causes Spider WMS to fall back to warehouseCode)
       const locationId = d.locationId != null ? String(d.locationId) : (d.id != null ? String(d.id) : "");
+      // warehouseCd from location-search response is the location's own ID (e.g. "W20260416000006")
+      // This is what the WMS assign API expects — NOT the general warehouse code
+      const locationWarehouseCd = d.warehouseCd != null ? String(d.warehouseCd) : "";
 
       const loc: LocationInfo = {
         locationCode,
         locationId,
+        warehouseCd: locationWarehouseCd,
         zoneName,
         aisleName,
         bayName,
@@ -260,7 +267,9 @@ function StowFlowInner() {
         receiveOrderCode: tag.orderCode,
         receiveItemId: tag.receiveItemId,
         warehouseCode: wc,
-        warehouseCd: tag.warehouseCd || wc,
+        // Use the location's own warehouseCd from location-search (e.g. "W20260416000006")
+        // Fall back to tag's warehouseCd only if location lookup didn't return one
+        warehouseCd: loc.warehouseCd || tag.warehouseCd || wc,
         customerCode: tag.customerCode,
         productSku: tag.sku,
         lotNo: tag.lotNo ?? "",
