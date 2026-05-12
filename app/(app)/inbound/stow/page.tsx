@@ -193,6 +193,9 @@ function StowFlowInner() {
     setAssigning(true);
     setAssignError("");
     try {
+      // Normalize expireDate to YYYYMMDD (API requires no dashes)
+      const expireDate = tag.expireDate?.replace(/-/g, "").slice(0, 8) ?? "";
+
       const payload = {
         receiveOrderCode: tag.orderCode,
         receiveItemId: tag.receiveItemId,
@@ -201,7 +204,7 @@ function StowFlowInner() {
         customerCode: tag.customerCode,
         productSku: tag.sku,
         lotNo: tag.lotNo,
-        expireDate: tag.expireDate,
+        expireDate,
         itemCondition: tag.itemCondition,
         qty,
         locationCode: location.locationCode,
@@ -215,8 +218,8 @@ function StowFlowInner() {
       });
       const json = await res.json().catch(() => null);
 
-      if (!res.ok || json?.isSuccess === false) {
-        throw new Error(json?.message ?? `Assign failed (HTTP ${res.status})`);
+      if (!res.ok || json?.isSuccess === false || json?.success === false) {
+        throw new Error(json?.message ?? json?.msg ?? `Assign failed (HTTP ${res.status})`);
       }
 
       // Mark stow tag as done in Redis
