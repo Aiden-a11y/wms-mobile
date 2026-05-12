@@ -139,10 +139,25 @@ function StowFlowInner() {
     setLocLoading(true);
     setLocError("");
     try {
-      // Use GET with query params — same as dashboard (POST returns empty data)
-      const params = new URLSearchParams({ q: raw, warehouseCode: tag.warehouseCode ?? "" });
-      const res = await fetch(`/api/wms/warehouse/location-search?${params}`, { headers: authHeaders() });
-      const json = await res.json().catch(() => null);
+      // Search 1: with warehouseCode
+      const wc = tag.warehouseCode ?? "";
+      const params1 = new URLSearchParams({ q: raw, warehouseCode: wc });
+      let res = await fetch(`/api/wms/warehouse/location-search?${params1}`, { headers: authHeaders() });
+      let json = await res.json().catch(() => null);
+
+      // Search 2: without warehouseCode (fallback if first returns empty)
+      const isEmpty = (j: unknown) => {
+        if (!j) return true;
+        const data = (j as Record<string, unknown>)?.data;
+        if (Array.isArray(data)) return data.length === 0;
+        return false;
+      };
+      if (res.ok && isEmpty(json)) {
+        const params2 = new URLSearchParams({ q: raw });
+        const res2 = await fetch(`/api/wms/warehouse/location-search?${params2}`, { headers: authHeaders() });
+        const json2 = await res2.json().catch(() => null);
+        if (res2.ok && !isEmpty(json2)) { res = res2; json = json2; }
+      }
 
       if (!res.ok) {
         setLocError(`Location API error ${res.status}: ${json?.message ?? JSON.stringify(json)?.slice(0, 150)}`);
@@ -151,14 +166,14 @@ function StowFlowInner() {
       }
 
       // Try multiple response shapes
-      const d = (json?.data ?? json?.list?.[0] ?? json?.[0] ?? json) as Record<string, unknown>;
+      const raw2 = json?.data ?? json?.list?.[0] ?? json?.[0] ?? json;
+      const d = (Array.isArray(raw2) ? raw2[0] : raw2) as Record<string, unknown>;
       const locationId = String(d?.locationId ?? d?.id ?? d?.locationCd ?? "");
       const locationCode = String(d?.locationCode ?? d?.code ?? d?.name ?? raw);
 
       if (!locationId) {
-        // API returned OK but no locationId — show the raw response for debugging
         setLocError(
-          `Location "${raw}" not found or no ID returned.\nAPI response: ${JSON.stringify(json).slice(0, 200)}`
+          `Location "${raw}" not found (warehouseCode="${wc}").\nAPI: ${JSON.stringify(json).slice(0, 200)}`
         );
         setLocLoading(false);
         return;
