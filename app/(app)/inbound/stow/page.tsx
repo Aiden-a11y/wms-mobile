@@ -139,12 +139,15 @@ function StowFlowInner() {
     setLocLoading(true);
     setLocError("");
     try {
-      // POST with { search, warehouseCode } — confirmed correct payload from network capture
+      // POST with { search, warehouseCode } — confirmed correct from network capture
       const wc = tag.warehouseCode ?? "";
+      const body: Record<string, string> = { search: raw };
+      if (wc) body.warehouseCode = wc;   // omit if empty — API will search all warehouses
+
       const res = await fetch(`/api/wms/warehouse/location-search`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ search: raw, warehouseCode: wc }),
+        body: JSON.stringify(body),
       });
       const json = await res.json().catch(() => null);
 
@@ -162,7 +165,7 @@ function StowFlowInner() {
 
       if (!locationId) {
         setLocError(
-          `Location "${raw}" not found (wc="${wc}").\nAPI: ${JSON.stringify(json).slice(0, 200)}`
+          `Location "${raw}" not found (wc="${wc || "(empty)"}"). API: ${JSON.stringify(json).slice(0, 200)}`
         );
         setLocLoading(false);
         return;
