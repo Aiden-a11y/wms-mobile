@@ -139,12 +139,21 @@ function StowFlowInner() {
     setLocLoading(true);
     setLocError("");
     try {
-      const params = new URLSearchParams({ q: raw, warehouseCode: tag.warehouseCode });
-      const res = await fetch(`/api/wms/warehouse/location-search?${params}`, { headers: authHeaders() });
+      // Try POST first (Spider WMS requires POST for location search)
+      let res = await fetch(`/api/wms/warehouse/location-search`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ locationCode: raw, warehouseCode: tag.warehouseCode, q: raw }),
+      });
+      // Fallback to GET if POST not supported
+      if (res.status === 405) {
+        const params = new URLSearchParams({ q: raw, warehouseCode: tag.warehouseCode });
+        res = await fetch(`/api/wms/warehouse/location-search?${params}`, { headers: authHeaders() });
+      }
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setLocError(`Location API error ${res.status}: ${json?.message ?? JSON.stringify(json)}`);
+        setLocError(`Location API error ${res.status}: ${json?.message ?? JSON.stringify(json)?.slice(0, 150)}`);
         setLocLoading(false);
         return;
       }
