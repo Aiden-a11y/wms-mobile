@@ -73,53 +73,159 @@ function locLabel(loc: LocationInfo): string {
     .filter(Boolean).join(" - ") || loc.locationCode;
 }
 
-/**
- * Returns an error string if the location is occupied, null if empty / inconclusive.
- * Single API call only — /warehouse/location/list with the scanned locationCode.
- * If the API doesn't return a qty field, we allow through (fast fail-open).
- */
-async function checkLocationOccupied(loc: LocationInfo, warehouseCode: string): Promise<string | null> {
-  const pad = (s: string) => s.padStart(2, "0");
-  const normalize = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
+// ── Occupied-location cache ───────────────────────────────────
+// Key: "occ_{warehouseCode}"  Value: JSON array of barcode strings
+// TTL: 3 minutes (stow process is short; invalidate after each successful assign)
+const CACHE_TTL = 3 * 60 * 1000;
 
-  const locBarcode = [loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName]
-    .map(pad).join("");
+function cacheKey(wc: string) { return `occ_${wc}`; }
+function cacheTsKey(wc: string) { return `occ_ts_${wc}`; }
+
+function pad2(s: string) { return String(s).padStart(2, "0"); }
+
+function locToBarcode(
+  zone: string, aisle: string, bay: string, level: string, position: string
+) {
+  return [zone, aisle, bay, level, position].map(pad2).join("");
+}
+
+/** Read cached occupied set, or null if stale / missing */
+function readCache(wc: string): Set<string> | null {
+  try {
+    const ts = Number(sessionStorage.getItem(cacheTsKey(wc)) ?? 0);
+    if (Date.now() - ts > CACHE_TTL) return null;
+    const raw = sessionStorage.getItem(cacheKey(wc));
+    if (!raw) return null;
+    return new Set(JSON.parse(raw) as string[]);
+  } catch { return null; }
+}
+
+function writeCache(wc: string, barcodes: Set<string>) {
+  try {
+    sessionStorage.setItem(cacheKey(wc), JSON.stringify([...barcodes]));
+    sessionStorage.setItem(cacheTsKey(wc), String(Date.now()));
+  } catch { /* storage full — ignore */ }
+}
+
+export function invalidateOccupiedCache(wc: string) {
+  try {
+    sessionStorage.removeItem(cacheKey(wc));
+    sessionStorage.removeItem(cacheTsKey(wc));
+  } catch { /* ignore */ }
+}
+
+/** Promise stored while pre-fetch is in-flight, so callers can await it */
+let prefetchPromise: Promise<Set<string>> | null = null;
+
+/**
+ * Build the full occupied-location barcode set for a warehouse.
+ * Runs all customer → SKU → inventory/detail calls in parallel.
+ * Result is cached in sessionStorage for CACHE_TTL ms.
+ */
+async function buildOccupiedSet(warehouseCode: string): Promise<Set<string>> {
+  const occupied = new Set<string>();
 
   try {
-    const res = await fetch("/api/wms/warehouse/location/list", {
-      method: "POST",
+    // 1. Customer list
+    const custRes = await fetch(`/api/wms/combo/customer-by-warehouse/${warehouseCode}`, {
       headers: authHeaders(),
-      body: JSON.stringify({ page: 1, pageSize: 20, warehouseCode, search: loc.locationCode }),
     });
-    const json = await res.json().catch(() => null);
-    const rows: Record<string, unknown>[] =
-      Array.isArray(json?.data?.list) ? json.data.list :
-      Array.isArray(json?.data)       ? json.data       :
-      Array.isArray(json)             ? json             : [];
+    const custJson = await custRes.json().catch(() => null);
+    const custArr: Record<string, unknown>[] =
+      Array.isArray(custJson?.data) ? custJson.data :
+      Array.isArray(custJson)       ? custJson       : [];
+    const customers = custArr.map((c) => String(c.code ?? c.customerCode ?? "")).filter(Boolean);
 
-    const match = rows.find((r) => {
-      const rBarcode = [r.zoneNm ?? r.zoneName ?? r.zone,
-                        r.aisleNm ?? r.aisleName ?? r.aisle,
-                        r.bayNm ?? r.bayName ?? r.bay,
-                        r.levelNm ?? r.levelName ?? r.level,
-                        r.positionNm ?? r.positionName ?? r.position]
-        .map((v) => pad(String(v ?? ""))).join("");
-      return rBarcode === locBarcode ||
-             normalize(String(r.locationCode ?? r.remark ?? "")) === normalize(loc.locationCode);
-    });
-
-    if (!match) return null; // location not found in list → allow
-
-    const qty = Number(
-      match.currentQty ?? match.locQty ?? match.qty ??
-      match.inventoryQty ?? match.storedQty ?? -1
+    // 2. SKU lists for all customers — parallel
+    const pairsList = await Promise.all(
+      customers.map(async (customerCode) => {
+        try {
+          const r = await fetch("/api/wms/product/list", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ warehouseCode, customerCode, page: 1, pageSize: 500 }),
+          });
+          const j = await r.json().catch(() => null);
+          const skus: string[] = (
+            (j?.data?.list ?? j?.data ?? []) as Record<string, unknown>[]
+          ).map((p) => String(p.productSku ?? "")).filter(Boolean);
+          return skus.map((sku) => ({ customerCode, sku }));
+        } catch { return []; }
+      })
     );
+    const pairs = pairsList.flat();
 
-    if (qty > 0) {
-      return `Location already occupied (qty: ${qty}).\nPlease scan a different location.`;
-    }
-  } catch { /* network error → allow */ }
+    // 3. Inventory for all (customer, SKU) pairs — parallel
+    await Promise.all(
+      pairs.map(async ({ customerCode, sku: productSku }) => {
+        try {
+          const r = await fetch("/api/wms/inventory/detail", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+          });
+          const j = await r.json().catch(() => null);
+          const dataField = j?.data;
+          const items: Record<string, unknown>[] =
+            Array.isArray(dataField)       ? dataField       :
+            Array.isArray(dataField?.list) ? dataField.list  :
+            Array.isArray(j)               ? j               : [];
 
+          for (const item of items) {
+            const bc = locToBarcode(
+              String(item.zoneName  ?? item.zone  ?? item.zoneCode  ?? ""),
+              String(item.aisleName ?? item.aisle ?? item.aisleCode ?? ""),
+              String(item.bayName   ?? item.bay   ?? item.bayCode   ?? ""),
+              String(item.levelName ?? item.level ?? item.levelCode ?? ""),
+              String(item.positionName ?? item.position ?? item.positionCode ?? ""),
+            );
+            if (bc.replace(/0/g, "")) occupied.add(bc);
+            const lc = String(item.locationCode ?? item.remark ?? "");
+            if (lc) occupied.add(lc.toLowerCase().replace(/[\s\-_/]+/g, ""));
+          }
+        } catch { /* skip */ }
+      })
+    );
+  } catch { /* return whatever we collected */ }
+
+  writeCache(warehouseCode, occupied);
+  return occupied;
+}
+
+/**
+ * Kick off a pre-fetch in the background (idempotent).
+ * Returns the in-flight promise so callers can await if needed.
+ */
+function startPrefetch(warehouseCode: string): Promise<Set<string>> {
+  const cached = readCache(warehouseCode);
+  if (cached) return Promise.resolve(cached);
+  if (!prefetchPromise) {
+    prefetchPromise = buildOccupiedSet(warehouseCode).finally(() => {
+      prefetchPromise = null;
+    });
+  }
+  return prefetchPromise;
+}
+
+/**
+ * Check if a location is occupied.
+ * Uses cached Set if available (instant), otherwise awaits the in-flight pre-fetch,
+ * or runs a fresh build (first call ever).
+ */
+async function checkLocationOccupied(
+  loc: LocationInfo,
+  warehouseCode: string
+): Promise<string | null> {
+  const locBarcode = locToBarcode(
+    loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName
+  );
+  const locNorm = loc.locationCode.toLowerCase().replace(/[\s\-_/]+/g, "");
+
+  const occupied = await startPrefetch(warehouseCode);
+
+  if (occupied.has(locBarcode) || occupied.has(locNorm)) {
+    return `Location already occupied.\nPlease scan a different location.`;
+  }
   return null;
 }
 
@@ -201,6 +307,8 @@ function StowFlowInner() {
 
         setTag(found);
         setQty(found.qty);
+        // Start pre-fetching occupied locations in background immediately
+        startPrefetch(found.warehouseCode || "STOO1");
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : "Network error loading tag");
       }
@@ -357,6 +465,9 @@ function StowFlowInner() {
       if (tagId) {
         await fetch(`/api/stow-tags/${tagId}`, { method: "PATCH" });
       }
+
+      // Invalidate occupied cache — inventory just changed
+      invalidateOccupiedCache(wc);
 
       setStep("done");
     } catch (e) {
