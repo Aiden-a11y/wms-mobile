@@ -238,7 +238,7 @@ function StowFlowInner() {
 
       if (locQty > 0) {
         setLocError(
-          `⚠️ 이 로케이션에 이미 재고가 있습니다 (수량: ${locQty}).\n다른 로케이션을 스캔하세요.`
+          `Location already occupied (qty: ${locQty}).\nPlease scan a different location.`
         );
         setLocLoading(false);
         return;
@@ -282,9 +282,9 @@ function StowFlowInner() {
           if (occupied) {
             const occupiedQty = Number(occupied.qty ?? occupied.availableQty ?? 0);
             setLocError(
-              `⚠️ 이 로케이션에 이미 재고가 있습니다.\n` +
-              `SKU: ${String(occupied.productSku ?? occupied.sku ?? tag.sku)} / 수량: ${occupiedQty}\n` +
-              `다른 로케이션을 스캔하세요.`
+              `Location already occupied.\n` +
+              `SKU: ${String(occupied.productSku ?? occupied.sku ?? tag.sku)}  Qty: ${occupiedQty}\n` +
+              `Please scan a different location.`
             );
             setLocLoading(false);
             return;
