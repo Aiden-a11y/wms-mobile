@@ -229,6 +229,70 @@ function StowFlowInner() {
         positionName,
       };
 
+      // ── 인벤토리 점유 체크 ──────────────────────────────────
+      // 1) location-search 응답 자체에 qty 필드가 있으면 바로 사용
+      const locQty = Number(
+        d.currentQty ?? d.locQty ?? d.qty ??
+        d.inventoryQty ?? d.storedQty ?? -1
+      );
+
+      if (locQty > 0) {
+        setLocError(
+          `⚠️ 이 로케이션에 이미 재고가 있습니다 (수량: ${locQty}).\n다른 로케이션을 스캔하세요.`
+        );
+        setLocLoading(false);
+        return;
+      }
+
+      // 2) qty 정보가 없으면 inventory/detail로 직접 조회
+      if (locQty < 0 && tag) {
+        try {
+          const wc = tag.warehouseCode || "STOO1";
+          // 같은 고객·SKU 조합으로 먼저 확인 (빠름)
+          const invRes = await fetch("/api/wms/inventory/detail", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({
+              warehouseCode: wc,
+              customerCode: tag.customerCode,
+              productSku: tag.sku,
+            }),
+          });
+          const invJson = await invRes.json().catch(() => null);
+          const dataField = invJson?.data;
+          const invItems: Record<string, unknown>[] =
+            Array.isArray(dataField) ? dataField :
+            Array.isArray(dataField?.list) ? dataField.list :
+            Array.isArray(invJson) ? invJson : [];
+
+          // 해당 로케이션과 일치하는 항목이 있으면 점유 판정
+          const occupied = invItems.find((r) => {
+            const rLoc = String(
+              r.locationCode ?? r.remark ??
+              [r.zoneName ?? r.zone, r.aisleName ?? r.aisle,
+               r.bayName ?? r.bay, r.levelName ?? r.level,
+               r.positionName ?? r.position].filter(Boolean).join("/")
+            );
+            // 다양한 구분자 표준화 후 비교
+            const normalize = (s: string) =>
+              s.toLowerCase().replace(/[\s\-_/]+/g, "");
+            return normalize(rLoc) === normalize(locationCode);
+          });
+
+          if (occupied) {
+            const occupiedQty = Number(occupied.qty ?? occupied.availableQty ?? 0);
+            setLocError(
+              `⚠️ 이 로케이션에 이미 재고가 있습니다.\n` +
+              `SKU: ${String(occupied.productSku ?? occupied.sku ?? tag.sku)} / 수량: ${occupiedQty}\n` +
+              `다른 로케이션을 스캔하세요.`
+            );
+            setLocLoading(false);
+            return;
+          }
+        } catch { /* 체크 실패 시 통과 허용 */ }
+      }
+      // ────────────────────────────────────────────────────────
+
       rawScanRef.current = raw;
       locationRef.current = loc;
       // Persist to sessionStorage so re-mounts / stale closures can't lose it
@@ -466,8 +530,10 @@ function StowFlowInner() {
               <p className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Scan Target Location</p>
             </div>
             {locError && (
-              <div className="flex items-center gap-1.5 text-xs text-red-400">
-                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />{locError}
+              <div className="flex items-start gap-2 rounded-xl px-3 py-3 text-xs text-red-300"
+                style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-red-400" />
+                <span className="whitespace-pre-line leading-relaxed">{locError}</span>
               </div>
             )}
             <input
