@@ -136,56 +136,67 @@ async function buildOccupiedSet(warehouseCode: string): Promise<Set<string>> {
       Array.isArray(custJson)       ? custJson       : [];
     const customers = custArr.map((c) => String(c.code ?? c.customerCode ?? "")).filter(Boolean);
 
-    // 2. SKU lists for all customers — parallel
-    const pairsList = await Promise.all(
-      customers.map(async (customerCode) => {
-        try {
-          const r = await fetch("/api/wms/product/list", {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify({ warehouseCode, customerCode, page: 1, pageSize: 500 }),
-          });
-          const j = await r.json().catch(() => null);
-          const skus: string[] = (
-            (j?.data?.list ?? j?.data ?? []) as Record<string, unknown>[]
-          ).map((p) => String(p.productSku ?? "")).filter(Boolean);
-          return skus.map((sku) => ({ customerCode, sku }));
-        } catch { return []; }
-      })
-    );
+    // 2. SKU lists — max 3 customers at a time
+    const pairsList: { customerCode: string; sku: string }[][] = [];
+    for (let i = 0; i < customers.length; i += 3) {
+      const batch = customers.slice(i, i + 3);
+      const res = await Promise.all(
+        batch.map(async (customerCode) => {
+          try {
+            const r = await fetch("/api/wms/product/list", {
+              method: "POST",
+              headers: authHeaders(),
+              body: JSON.stringify({ warehouseCode, customerCode, page: 1, pageSize: 500 }),
+            });
+            const j = await r.json().catch(() => null);
+            const skus: string[] = (
+              (j?.data?.list ?? j?.data ?? []) as Record<string, unknown>[]
+            ).map((p) => String(p.productSku ?? "")).filter(Boolean);
+            return skus.map((sku) => ({ customerCode, sku }));
+          } catch { return []; }
+        })
+      );
+      pairsList.push(...res);
+    }
     const pairs = pairsList.flat();
 
-    // 3. Inventory for all (customer, SKU) pairs — parallel
-    await Promise.all(
-      pairs.map(async ({ customerCode, sku: productSku }) => {
-        try {
-          const r = await fetch("/api/wms/inventory/detail", {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify({ warehouseCode, customerCode, productSku }),
-          });
-          const j = await r.json().catch(() => null);
-          const dataField = j?.data;
-          const items: Record<string, unknown>[] =
-            Array.isArray(dataField)       ? dataField       :
-            Array.isArray(dataField?.list) ? dataField.list  :
-            Array.isArray(j)               ? j               : [];
+    // 3. Inventory — max 5 concurrent calls
+    const addItems = (items: Record<string, unknown>[]) => {
+      for (const item of items) {
+        const bc = locToBarcode(
+          String(item.zoneName  ?? item.zone  ?? item.zoneCode  ?? ""),
+          String(item.aisleName ?? item.aisle ?? item.aisleCode ?? ""),
+          String(item.bayName   ?? item.bay   ?? item.bayCode   ?? ""),
+          String(item.levelName ?? item.level ?? item.levelCode ?? ""),
+          String(item.positionName ?? item.position ?? item.positionCode ?? ""),
+        );
+        if (bc.replace(/0/g, "")) occupied.add(bc);
+        const lc = String(item.locationCode ?? item.remark ?? "");
+        if (lc) occupied.add(lc.toLowerCase().replace(/[\s\-_/]+/g, ""));
+      }
+    };
 
-          for (const item of items) {
-            const bc = locToBarcode(
-              String(item.zoneName  ?? item.zone  ?? item.zoneCode  ?? ""),
-              String(item.aisleName ?? item.aisle ?? item.aisleCode ?? ""),
-              String(item.bayName   ?? item.bay   ?? item.bayCode   ?? ""),
-              String(item.levelName ?? item.level ?? item.levelCode ?? ""),
-              String(item.positionName ?? item.position ?? item.positionCode ?? ""),
-            );
-            if (bc.replace(/0/g, "")) occupied.add(bc);
-            const lc = String(item.locationCode ?? item.remark ?? "");
-            if (lc) occupied.add(lc.toLowerCase().replace(/[\s\-_/]+/g, ""));
-          }
-        } catch { /* skip */ }
-      })
-    );
+    for (let i = 0; i < pairs.length; i += 5) {
+      const batch = pairs.slice(i, i + 5);
+      await Promise.all(
+        batch.map(async ({ customerCode, sku: productSku }) => {
+          try {
+            const r = await fetch("/api/wms/inventory/detail", {
+              method: "POST",
+              headers: authHeaders(),
+              body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+            });
+            const j = await r.json().catch(() => null);
+            const dataField = j?.data;
+            const items: Record<string, unknown>[] =
+              Array.isArray(dataField)       ? dataField       :
+              Array.isArray(dataField?.list) ? dataField.list  :
+              Array.isArray(j)               ? j               : [];
+            addItems(items);
+          } catch { /* skip */ }
+        })
+      );
+    }
   } catch { /* return whatever we collected */ }
 
   writeCache(warehouseCode, occupied);
@@ -307,8 +318,6 @@ function StowFlowInner() {
 
         setTag(found);
         setQty(found.qty);
-        // Start pre-fetching occupied locations in background immediately
-        startPrefetch(found.warehouseCode || "STOO1");
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : "Network error loading tag");
       }
@@ -618,7 +627,13 @@ function StowFlowInner() {
                 style={GLASS}>+</button>
             </div>
             <button
-              onClick={() => { if (qty > 0) setStep("location"); }}
+              onClick={() => {
+                if (qty > 0) {
+                  // Start building occupied-location cache in background while user scans
+                  startPrefetch(tag.warehouseCode || "STOO1");
+                  setStep("location");
+                }
+              }}
               className="w-full py-4 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               style={{ background: "#3b82f6" }}
             >
