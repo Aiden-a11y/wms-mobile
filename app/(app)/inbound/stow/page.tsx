@@ -73,6 +73,127 @@ function locLabel(loc: LocationInfo): string {
     .filter(Boolean).join(" - ") || loc.locationCode;
 }
 
+/**
+ * Returns an error string if the location is occupied, null if empty / check inconclusive.
+ *
+ * Strategy:
+ *  1. POST /warehouse/location/list with the locationCode as search — check qty fields
+ *  2. Fetch all customers for the warehouse, then inventory/detail per customer
+ *     and check if any inventory row matches this location
+ */
+async function checkLocationOccupied(loc: LocationInfo, warehouseCode: string): Promise<string | null> {
+  const normalize = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
+
+  // Build a canonical barcode key from zone/aisle/bay/level/position (zero-padded)
+  const pad = (s: string) => s.padStart(2, "0");
+  const locBarcode = [loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName]
+    .map(pad).join("");
+
+  // ── Method 1: location/list search ──────────────────────────
+  try {
+    const res = await fetch("/api/wms/warehouse/location/list", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ page: 1, pageSize: 10, warehouseCode, search: loc.locationCode }),
+    });
+    const json = await res.json().catch(() => null);
+    const rows: Record<string, unknown>[] =
+      Array.isArray(json?.data?.list) ? json.data.list :
+      Array.isArray(json?.data) ? json.data :
+      Array.isArray(json) ? json : [];
+
+    // Find the exact matching location row
+    const match = rows.find((r) => {
+      const rBarcode = [r.zoneNm ?? r.zoneName ?? r.zone,
+                        r.aisleNm ?? r.aisleName ?? r.aisle,
+                        r.bayNm ?? r.bayName ?? r.bay,
+                        r.levelNm ?? r.levelName ?? r.level,
+                        r.positionNm ?? r.positionName ?? r.position]
+        .map((v) => pad(String(v ?? ""))).join("");
+      const rCode = String(r.locationCode ?? r.remark ?? "");
+      return rBarcode === locBarcode ||
+             normalize(rCode) === normalize(loc.locationCode);
+    });
+
+    if (match) {
+      const qty = Number(
+        match.currentQty ?? match.locQty ?? match.qty ??
+        match.inventoryQty ?? match.storedQty ?? -1
+      );
+      if (qty > 0) {
+        return `Location already occupied (qty: ${qty}).\nPlease scan a different location.`;
+      }
+      if (qty === 0) return null; // confirmed empty
+    }
+  } catch { /* fall through to method 2 */ }
+
+  // ── Method 2: inventory/detail via customer list ─────────────
+  try {
+    const custRes = await fetch(`/api/wms/combo/customer-by-warehouse/${warehouseCode}`, {
+      headers: authHeaders(),
+    });
+    const custJson = await custRes.json().catch(() => null);
+    const custArr: Record<string, unknown>[] =
+      Array.isArray(custJson?.data) ? custJson.data :
+      Array.isArray(custJson) ? custJson : [];
+    const customers = custArr
+      .map((c) => String(c.code ?? c.customerCode ?? ""))
+      .filter(Boolean);
+
+    for (const customerCode of customers) {
+      try {
+        // Get SKU list for this customer
+        const skuRes = await fetch("/api/wms/product/list", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ warehouseCode, customerCode, page: 1, pageSize: 200 }),
+        });
+        const skuJson = await skuRes.json().catch(() => null);
+        const skus: string[] = (
+          (skuJson?.data?.list ?? skuJson?.data ?? []) as Record<string, unknown>[]
+        ).map((p) => String(p.productSku ?? "")).filter(Boolean);
+
+        for (const productSku of skus) {
+          const invRes = await fetch("/api/wms/inventory/detail", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+          });
+          const invJson = await invRes.json().catch(() => null);
+          const dataField = invJson?.data;
+          const invItems: Record<string, unknown>[] =
+            Array.isArray(dataField) ? dataField :
+            Array.isArray(dataField?.list) ? dataField.list :
+            Array.isArray(invJson) ? invJson : [];
+
+          const hit = invItems.find((r) => {
+            const rBarcode = [r.zoneName ?? r.zone ?? r.zoneCode,
+                              r.aisleName ?? r.aisle ?? r.aisleCode,
+                              r.bayName ?? r.bay ?? r.bayCode,
+                              r.levelName ?? r.level ?? r.levelCode,
+                              r.positionName ?? r.position ?? r.positionCode]
+              .map((v) => pad(String(v ?? ""))).join("");
+            const rCode = String(r.locationCode ?? r.remark ?? "");
+            return rBarcode === locBarcode ||
+                   normalize(rCode) === normalize(loc.locationCode);
+          });
+
+          if (hit) {
+            const qty = Number(hit.qty ?? hit.availableQty ?? 0);
+            return (
+              `Location already occupied.\n` +
+              `SKU: ${String(hit.productSku ?? hit.sku ?? productSku)}  Qty: ${qty}\n` +
+              `Please scan a different location.`
+            );
+          }
+        }
+      } catch { /* try next customer */ }
+    }
+  } catch { /* check inconclusive — allow */ }
+
+  return null; // no evidence of occupancy → allow
+}
+
 function StowFlowInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -229,67 +350,12 @@ function StowFlowInner() {
         positionName,
       };
 
-      // ── 인벤토리 점유 체크 ──────────────────────────────────
-      // 1) location-search 응답 자체에 qty 필드가 있으면 바로 사용
-      const locQty = Number(
-        d.currentQty ?? d.locQty ?? d.qty ??
-        d.inventoryQty ?? d.storedQty ?? -1
-      );
-
-      if (locQty > 0) {
-        setLocError(
-          `Location already occupied (qty: ${locQty}).\nPlease scan a different location.`
-        );
+      // ── Occupancy check ─────────────────────────────────────
+      const blocked = await checkLocationOccupied(loc, wc);
+      if (blocked) {
+        setLocError(blocked);
         setLocLoading(false);
         return;
-      }
-
-      // 2) qty 정보가 없으면 inventory/detail로 직접 조회
-      if (locQty < 0 && tag) {
-        try {
-          const wc = tag.warehouseCode || "STOO1";
-          // 같은 고객·SKU 조합으로 먼저 확인 (빠름)
-          const invRes = await fetch("/api/wms/inventory/detail", {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify({
-              warehouseCode: wc,
-              customerCode: tag.customerCode,
-              productSku: tag.sku,
-            }),
-          });
-          const invJson = await invRes.json().catch(() => null);
-          const dataField = invJson?.data;
-          const invItems: Record<string, unknown>[] =
-            Array.isArray(dataField) ? dataField :
-            Array.isArray(dataField?.list) ? dataField.list :
-            Array.isArray(invJson) ? invJson : [];
-
-          // 해당 로케이션과 일치하는 항목이 있으면 점유 판정
-          const occupied = invItems.find((r) => {
-            const rLoc = String(
-              r.locationCode ?? r.remark ??
-              [r.zoneName ?? r.zone, r.aisleName ?? r.aisle,
-               r.bayName ?? r.bay, r.levelName ?? r.level,
-               r.positionName ?? r.position].filter(Boolean).join("/")
-            );
-            // 다양한 구분자 표준화 후 비교
-            const normalize = (s: string) =>
-              s.toLowerCase().replace(/[\s\-_/]+/g, "");
-            return normalize(rLoc) === normalize(locationCode);
-          });
-
-          if (occupied) {
-            const occupiedQty = Number(occupied.qty ?? occupied.availableQty ?? 0);
-            setLocError(
-              `Location already occupied.\n` +
-              `SKU: ${String(occupied.productSku ?? occupied.sku ?? tag.sku)}  Qty: ${occupiedQty}\n` +
-              `Please scan a different location.`
-            );
-            setLocLoading(false);
-            return;
-          }
-        } catch { /* 체크 실패 시 통과 허용 */ }
       }
       // ────────────────────────────────────────────────────────
 
