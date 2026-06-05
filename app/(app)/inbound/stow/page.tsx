@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ChevronLeft, CheckCircle2, MapPin, Package,
-  RefreshCw, ScanLine, AlertCircle, Loader2, RotateCcw, ArrowRight,
+  RefreshCw, ScanLine, AlertCircle, Loader2, RotateCcw, ArrowRight, Boxes,
 } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import type { PersistedStowTag } from "@/lib/stow-tags";
@@ -164,7 +164,7 @@ function StowFlowInner() {
 
   const [step, setStep] = useState<Step>("qty");
   const [qty, setQty] = useState(0);
-  const [remainingQty, setRemainingQty] = useState(0); // after partial stow
+  const [remainingQty, setRemainingQty] = useState(0);
   const [location, setLocation] = useState<LocationInfo | null>(null);
   const locationRef = useRef<LocationInfo | null>(null);
   const rawScanRef = useRef<string>("");
@@ -173,6 +173,11 @@ function StowFlowInner() {
   const [locError, setLocError] = useState("");
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState("");
+
+  // Inventory locations for this SKU
+  interface InvLocItem { locationCode: string; qty: number; locTypeLabel: string; locType: "picking" | "storage" | "unknown" }
+  const [invLocs, setInvLocs] = useState<InvLocItem[] | null>(null);
+  const [invLocsLoading, setInvLocsLoading] = useState(false);
 
   const locRef = useRef<HTMLInputElement>(null);
 
@@ -228,6 +233,9 @@ function StowFlowInner() {
 
         setTag(found);
         setQty(found.qty);
+
+        // Fetch inventory locations in background
+        fetchInvLocs(found.warehouseCode || "STOO1", found.customerCode, found.sku);
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : "Network error loading tag");
       }
@@ -235,6 +243,58 @@ function StowFlowInner() {
     }
     fetchTag();
   }, [tagId]);
+
+  async function fetchInvLocs(warehouseCode: string, customerCode: string, productSku: string) {
+    setInvLocsLoading(true);
+    try {
+      const r = await fetch("/api/wms/inventory/detail", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+      });
+      const j = await r.json().catch(() => null);
+      const dataField = j?.data;
+      const items: Record<string, unknown>[] =
+        Array.isArray(dataField)       ? dataField       :
+        Array.isArray(dataField?.list) ? dataField.list  :
+        Array.isArray(j)               ? j               : [];
+
+      const pad = (s: string) => String(s).padStart(2, "0");
+      const parsed: InvLocItem[] = items
+        .map((item) => {
+          const z = String(item.zoneName  ?? item.zone  ?? "");
+          const a = String(item.aisleName ?? item.aisle ?? "");
+          const b = String(item.bayName   ?? item.bay   ?? "");
+          const l = String(item.levelName ?? item.level ?? "");
+          const p = String(item.positionName ?? item.position ?? "");
+          const locationCode = String(item.locationCode ?? [z, a, b, l, p].filter(Boolean).join("/"));
+          const qty = Number(item.qty ?? item.availableQty ?? 0);
+
+          const rawType = String(
+            item.locationType ?? item.locationTypeCd ?? item.locationTypeNm ??
+            item.storageType  ?? item.storageCd      ?? item.zoneType ?? item.pickFlag ?? ""
+          ).toLowerCase();
+          const locType: "picking" | "storage" | "unknown" =
+            rawType.includes("pick") || rawType === "p" || rawType === "1" || rawType === "true" ? "picking" :
+            rawType.includes("stor") || rawType.includes("reserve") || rawType.includes("bulk") || rawType === "s" ? "storage" :
+            "unknown";
+          const locTypeLabel = locType === "picking" ? "Picking" : locType === "storage" ? "Storage" :
+            rawType ? rawType.charAt(0).toUpperCase() + rawType.slice(1) : "";
+
+          return { locationCode, qty, locType, locTypeLabel };
+        })
+        .filter((loc) => loc.qty > 0)
+        .sort((a, b) => {
+          const n = (s: string) => parseInt(s.replace(/\D/g, "") || "0", 10);
+          const [az, aa, ab] = a.locationCode.split(/[/\-]/).map(n);
+          const [bz, ba, bb] = b.locationCode.split(/[/\-]/).map(n);
+          return (az - bz) || (aa - ba) || (ab - bb);
+        });
+
+      setInvLocs(parsed);
+    } catch { setInvLocs([]); }
+    setInvLocsLoading(false);
+  }
 
   useEffect(() => {
     if (step === "location") setTimeout(() => locRef.current?.focus(), 100);
@@ -546,6 +606,48 @@ function StowFlowInner() {
             </div>
           </div>
         </div>
+
+        {/* ── Inventory locations (always visible from qty step) ── */}
+        {(step === "qty" || step === "location" || step === "confirm") && (
+          <div className="rounded-2xl p-4" style={GLASS}>
+            <div className="flex items-center gap-2 mb-2">
+              <Boxes className="w-4 h-4 text-slate-500" />
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Current Stock Locations</p>
+              {invLocsLoading && <Loader2 className="w-3 h-3 animate-spin text-slate-600 ml-auto" />}
+            </div>
+            {invLocsLoading && !invLocs && (
+              <div className="space-y-2">
+                {[...Array(2)].map((_, i) => (
+                  <div key={i} className="h-5 rounded animate-pulse" style={{ background: "rgba(255,255,255,0.05)" }} />
+                ))}
+              </div>
+            )}
+            {invLocs && invLocs.length === 0 && (
+              <p className="text-xs text-slate-600">No stock found in system</p>
+            )}
+            {invLocs && invLocs.length > 0 && (
+              <div className="space-y-1.5">
+                {invLocs.map((loc, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-slate-300 flex-1">{loc.locationCode}</span>
+                    {loc.locTypeLabel && (
+                      <span className="text-xs font-semibold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                        style={loc.locType === "picking"
+                          ? { background: "rgba(59,130,246,0.15)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.3)" }
+                          : loc.locType === "storage"
+                          ? { background: "rgba(139,92,246,0.15)", color: "#c4b5fd", border: "1px solid rgba(139,92,246,0.3)" }
+                          : { background: "rgba(255,255,255,0.06)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.1)" }
+                        }>
+                        {loc.locTypeLabel}
+                      </span>
+                    )}
+                    <span className="text-xs font-bold text-slate-400 flex-shrink-0">×{loc.qty}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── QTY ── */}
         {step === "qty" && (
