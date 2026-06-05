@@ -17,6 +17,8 @@ interface InvLoc {
   locationCode: string;
   zone: string; aisle: string; bay: string; level: string; position: string;
   qty: number;
+  locationType: "picking" | "storage" | "unknown";
+  locationTypeLabel: string;
 }
 
 function buildLocCode(r: Record<string, unknown>) {
@@ -26,6 +28,26 @@ function buildLocCode(r: Record<string, unknown>) {
   const l = String(r.levelName ?? r.level ?? "");
   const p = String(r.positionName ?? r.position ?? "");
   return String(r.locationCode ?? [z, a, b, l, p].filter(Boolean).join("/"));
+}
+
+function resolveLocationType(r: Record<string, unknown>): { locationType: "picking" | "storage" | "unknown"; locationTypeLabel: string } {
+  const raw = String(
+    r.locationType ?? r.locationTypeCd ?? r.locationTypeNm ??
+    r.storageType  ?? r.storageCd      ?? r.storageTypeCd  ??
+    r.zoneType     ?? r.zoneTypeCd     ?? r.pickFlag       ?? ""
+  ).toLowerCase();
+
+  if (!raw || raw === "undefined" || raw === "null" || raw === "") {
+    return { locationType: "unknown", locationTypeLabel: "" };
+  }
+
+  const isPick = raw.includes("pick") || raw === "p" || raw === "1" || raw === "true" || raw.includes("fwd");
+  const isStorage = raw.includes("stor") || raw.includes("reserve") || raw.includes("bulk") || raw === "s" || raw === "0";
+
+  if (isPick)    return { locationType: "picking",  locationTypeLabel: "Picking" };
+  if (isStorage) return { locationType: "storage",  locationTypeLabel: "Storage" };
+  // Use the raw label as-is if it doesn't match known patterns
+  return { locationType: "unknown", locationTypeLabel: raw.charAt(0).toUpperCase() + raw.slice(1) };
 }
 
 export default function StowListPage() {
@@ -98,6 +120,7 @@ export default function StowListPage() {
               level:    String(item.levelName ?? item.level ?? ""),
               position: String(item.positionName ?? item.position ?? ""),
               qty:      Number(item.qty ?? item.availableQty ?? 0),
+              ...resolveLocationType(item),
             }))
             .filter((loc) => loc.qty > 0)
             .sort((a, b) => {
@@ -270,6 +293,21 @@ export default function StowListPage() {
                           <div key={li} className="flex items-center gap-2">
                             <MapPin className="w-3 h-3 text-slate-600 flex-shrink-0" />
                             <span className="font-mono text-xs text-slate-400">{loc.locationCode}</span>
+                            {loc.locationType !== "unknown" && (
+                              <span className="text-xs font-semibold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                                style={loc.locationType === "picking"
+                                  ? { background: "rgba(59,130,246,0.15)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.3)" }
+                                  : { background: "rgba(139,92,246,0.15)", color: "#c4b5fd", border: "1px solid rgba(139,92,246,0.3)" }
+                                }>
+                                {loc.locationTypeLabel}
+                              </span>
+                            )}
+                            {loc.locationType === "unknown" && loc.locationTypeLabel && (
+                              <span className="text-xs px-1.5 py-0.5 rounded-md flex-shrink-0"
+                                style={{ background: "rgba(255,255,255,0.06)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.1)" }}>
+                                {loc.locationTypeLabel}
+                              </span>
+                            )}
                             <span className="text-xs text-slate-500 ml-auto">×{loc.qty}</span>
                           </div>
                         ))}
