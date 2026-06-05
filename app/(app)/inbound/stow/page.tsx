@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ChevronLeft, CheckCircle2, MapPin, Package,
-  RefreshCw, ScanLine, AlertCircle, Loader2, RotateCcw,
+  RefreshCw, ScanLine, AlertCircle, Loader2, RotateCcw, ArrowRight,
 } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import type { PersistedStowTag } from "@/lib/stow-tags";
@@ -22,7 +22,7 @@ type Step = "qty" | "location" | "confirm" | "done";
 interface LocationInfo {
   locationCode: string;
   locationId: string;
-  warehouseCd: string;  // location's own warehouseCd from location-search API
+  warehouseCd: string;
   zoneName: string;
   aisleName: string;
   bayName: string;
@@ -73,170 +73,83 @@ function locLabel(loc: LocationInfo): string {
     .filter(Boolean).join(" - ") || loc.locationCode;
 }
 
-// ── Occupied-location cache ───────────────────────────────────
-// Key: "occ_{warehouseCode}"  Value: JSON array of barcode strings
-// TTL: 3 minutes (stow process is short; invalidate after each successful assign)
-const CACHE_TTL = 3 * 60 * 1000;
-
-function cacheKey(wc: string) { return `occ_${wc}`; }
-function cacheTsKey(wc: string) { return `occ_ts_${wc}`; }
-
-function pad2(s: string) { return String(s).padStart(2, "0"); }
-
-function locToBarcode(
-  zone: string, aisle: string, bay: string, level: string, position: string
-) {
-  return [zone, aisle, bay, level, position].map(pad2).join("");
-}
-
-/** Read cached occupied set, or null if stale / missing */
-function readCache(wc: string): Set<string> | null {
-  try {
-    const ts = Number(sessionStorage.getItem(cacheTsKey(wc)) ?? 0);
-    if (Date.now() - ts > CACHE_TTL) return null;
-    const raw = sessionStorage.getItem(cacheKey(wc));
-    if (!raw) return null;
-    return new Set(JSON.parse(raw) as string[]);
-  } catch { return null; }
-}
-
-function writeCache(wc: string, barcodes: Set<string>) {
-  try {
-    sessionStorage.setItem(cacheKey(wc), JSON.stringify([...barcodes]));
-    sessionStorage.setItem(cacheTsKey(wc), String(Date.now()));
-  } catch { /* storage full — ignore */ }
-}
-
-export function invalidateOccupiedCache(wc: string) {
-  try {
-    sessionStorage.removeItem(cacheKey(wc));
-    sessionStorage.removeItem(cacheTsKey(wc));
-  } catch { /* ignore */ }
-}
-
-/** Promise stored while pre-fetch is in-flight, so callers can await it */
-let prefetchPromise: Promise<Set<string>> | null = null;
-
 /**
- * Build the full occupied-location barcode set for a warehouse.
- * Runs all customer → SKU → inventory/detail calls in parallel.
- * Result is cached in sessionStorage for CACHE_TTL ms.
- */
-async function buildOccupiedSet(warehouseCode: string): Promise<Set<string>> {
-  const occupied = new Set<string>();
-
-  try {
-    // 1. Customer list
-    const custRes = await fetch(`/api/wms/combo/customer-by-warehouse/${warehouseCode}`, {
-      headers: authHeaders(),
-    });
-    const custJson = await custRes.json().catch(() => null);
-    const custArr: Record<string, unknown>[] =
-      Array.isArray(custJson?.data) ? custJson.data :
-      Array.isArray(custJson)       ? custJson       : [];
-    const customers = custArr.map((c) => String(c.code ?? c.customerCode ?? "")).filter(Boolean);
-
-    // 2. SKU lists — max 3 customers at a time
-    const pairsList: { customerCode: string; sku: string }[][] = [];
-    for (let i = 0; i < customers.length; i += 3) {
-      const batch = customers.slice(i, i + 3);
-      const res = await Promise.all(
-        batch.map(async (customerCode) => {
-          try {
-            const r = await fetch("/api/wms/product/list", {
-              method: "POST",
-              headers: authHeaders(),
-              body: JSON.stringify({ warehouseCode, customerCode, page: 1, pageSize: 500 }),
-            });
-            const j = await r.json().catch(() => null);
-            const skus: string[] = (
-              (j?.data?.list ?? j?.data ?? []) as Record<string, unknown>[]
-            ).map((p) => String(p.productSku ?? "")).filter(Boolean);
-            return skus.map((sku) => ({ customerCode, sku }));
-          } catch { return []; }
-        })
-      );
-      pairsList.push(...res);
-    }
-    const pairs = pairsList.flat();
-
-    // 3. Inventory — max 5 concurrent calls
-    const addItems = (items: Record<string, unknown>[]) => {
-      for (const item of items) {
-        const bc = locToBarcode(
-          String(item.zoneName  ?? item.zone  ?? item.zoneCode  ?? ""),
-          String(item.aisleName ?? item.aisle ?? item.aisleCode ?? ""),
-          String(item.bayName   ?? item.bay   ?? item.bayCode   ?? ""),
-          String(item.levelName ?? item.level ?? item.levelCode ?? ""),
-          String(item.positionName ?? item.position ?? item.positionCode ?? ""),
-        );
-        if (bc.replace(/0/g, "")) occupied.add(bc);
-        const lc = String(item.locationCode ?? item.remark ?? "");
-        if (lc) occupied.add(lc.toLowerCase().replace(/[\s\-_/]+/g, ""));
-      }
-    };
-
-    for (let i = 0; i < pairs.length; i += 5) {
-      const batch = pairs.slice(i, i + 5);
-      await Promise.all(
-        batch.map(async ({ customerCode, sku: productSku }) => {
-          try {
-            const r = await fetch("/api/wms/inventory/detail", {
-              method: "POST",
-              headers: authHeaders(),
-              body: JSON.stringify({ warehouseCode, customerCode, productSku }),
-            });
-            const j = await r.json().catch(() => null);
-            const dataField = j?.data;
-            const items: Record<string, unknown>[] =
-              Array.isArray(dataField)       ? dataField       :
-              Array.isArray(dataField?.list) ? dataField.list  :
-              Array.isArray(j)               ? j               : [];
-            addItems(items);
-          } catch { /* skip */ }
-        })
-      );
-    }
-  } catch { /* return whatever we collected */ }
-
-  writeCache(warehouseCode, occupied);
-  return occupied;
-}
-
-/**
- * Kick off a pre-fetch in the background (idempotent).
- * Returns the in-flight promise so callers can await if needed.
- */
-function startPrefetch(warehouseCode: string): Promise<Set<string>> {
-  const cached = readCache(warehouseCode);
-  if (cached) return Promise.resolve(cached);
-  if (!prefetchPromise) {
-    prefetchPromise = buildOccupiedSet(warehouseCode).finally(() => {
-      prefetchPromise = null;
-    });
-  }
-  return prefetchPromise;
-}
-
-/**
- * Check if a location is occupied.
- * Uses cached Set if available (instant), otherwise awaits the in-flight pre-fetch,
- * or runs a fresh build (first call ever).
+ * Occupancy check — 2 sequential API calls only, no background work.
+ * 1. inventory/detail for tag's customerCode+SKU → catches same-customer stock
+ * 2. location/list qty check → catches any customer (if API returns qty fields)
  */
 async function checkLocationOccupied(
   loc: LocationInfo,
-  warehouseCode: string
+  warehouseCode: string,
+  customerCode: string,
+  productSku: string,
 ): Promise<string | null> {
-  const locBarcode = locToBarcode(
-    loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName
-  );
+  const pad = (s: string) => String(s).padStart(2, "0");
+  const locBarcode = [loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName]
+    .map(pad).join("");
   const locNorm = loc.locationCode.toLowerCase().replace(/[\s\-_/]+/g, "");
 
-  const occupied = await startPrefetch(warehouseCode);
+  // ── Call 1: inventory/detail ────────────────────────────────
+  try {
+    const r = await fetch("/api/wms/inventory/detail", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+    });
+    const j = await r.json().catch(() => null);
+    const dataField = j?.data;
+    const items: Record<string, unknown>[] =
+      Array.isArray(dataField)       ? dataField       :
+      Array.isArray(dataField?.list) ? dataField.list  :
+      Array.isArray(j)               ? j               : [];
 
-  if (occupied.has(locBarcode) || occupied.has(locNorm)) {
-    return `Location already occupied.\nPlease scan a different location.`;
-  }
+    const hit = items.find((item) => {
+      const bc = [item.zoneName ?? item.zone ?? item.zoneCode,
+                  item.aisleName ?? item.aisle ?? item.aisleCode,
+                  item.bayName ?? item.bay ?? item.bayCode,
+                  item.levelName ?? item.level ?? item.levelCode,
+                  item.positionName ?? item.position ?? item.positionCode]
+        .map((v) => pad(String(v ?? ""))).join("");
+      const lc = String(item.locationCode ?? item.remark ?? "").toLowerCase().replace(/[\s\-_/]+/g, "");
+      return bc === locBarcode || lc === locNorm;
+    });
+
+    if (hit) {
+      const qty = Number(hit.qty ?? hit.availableQty ?? 0);
+      return `Location already occupied.\nSKU: ${String(hit.productSku ?? hit.sku ?? productSku)}  Qty: ${qty}\nPlease scan a different location.`;
+    }
+  } catch { /* skip to call 2 */ }
+
+  // ── Call 2: location/list qty check ────────────────────────
+  try {
+    const r = await fetch("/api/wms/warehouse/location/list", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ page: 1, pageSize: 20, warehouseCode, search: loc.locationCode }),
+    });
+    const j = await r.json().catch(() => null);
+    const rows: Record<string, unknown>[] =
+      Array.isArray(j?.data?.list) ? j.data.list :
+      Array.isArray(j?.data)       ? j.data       :
+      Array.isArray(j)             ? j             : [];
+
+    const match = rows.find((row) => {
+      const bc = [row.zoneNm ?? row.zoneName ?? row.zone,
+                  row.aisleNm ?? row.aisleName ?? row.aisle,
+                  row.bayNm ?? row.bayName ?? row.bay,
+                  row.levelNm ?? row.levelName ?? row.level,
+                  row.positionNm ?? row.positionName ?? row.position]
+        .map((v) => pad(String(v ?? ""))).join("");
+      const lc = String(row.locationCode ?? row.remark ?? "").toLowerCase().replace(/[\s\-_/]+/g, "");
+      return bc === locBarcode || lc === locNorm;
+    });
+
+    if (match) {
+      const qty = Number(match.currentQty ?? match.locQty ?? match.qty ?? match.inventoryQty ?? -1);
+      if (qty > 0) return `Location already occupied (qty: ${qty}).\nPlease scan a different location.`;
+    }
+  } catch { /* inconclusive — allow */ }
+
   return null;
 }
 
@@ -251,9 +164,10 @@ function StowFlowInner() {
 
   const [step, setStep] = useState<Step>("qty");
   const [qty, setQty] = useState(0);
+  const [remainingQty, setRemainingQty] = useState(0); // after partial stow
   const [location, setLocation] = useState<LocationInfo | null>(null);
-  const locationRef = useRef<LocationInfo | null>(null); // survives re-renders
-  const rawScanRef = useRef<string>(""); // raw barcode, always set before state updates
+  const locationRef = useRef<LocationInfo | null>(null);
+  const rawScanRef = useRef<string>("");
   const [locScan, setLocScan] = useState("");
   const [locLoading, setLocLoading] = useState(false);
   const [locError, setLocError] = useState("");
@@ -289,14 +203,10 @@ function StowFlowInner() {
           return;
         }
 
-        // If tag is missing customerCode or warehouseCd, fetch from Spider WMS
         if (!found.customerCode || !found.warehouseCd) {
           try {
             const headers = authHeaders();
-            const orderRes = await fetch(
-              `/api/wms/receiving/items/${found.orderCode}`,
-              { headers }
-            );
+            const orderRes = await fetch(`/api/wms/receiving/items/${found.orderCode}`, { headers });
             const orderJson = await orderRes.json().catch(() => null);
             const items: Record<string, unknown>[] =
               Array.isArray(orderJson?.data?.items) ? orderJson.data.items :
@@ -313,7 +223,7 @@ function StowFlowInner() {
                 warehouseCd:   found.warehouseCd   || String(item.warehouseCd  ?? item.warehouseId ?? ""),
               };
             }
-          } catch { /* ignore — proceed with partial data */ }
+          } catch { /* ignore */ }
         }
 
         setTag(found);
@@ -337,14 +247,11 @@ function StowFlowInner() {
     setLocLoading(true);
     setLocError("");
     try {
-      // POST with { search, warehouseCode } — confirmed correct from network capture
-      const wc = tag.warehouseCode || "STOO1";   // fallback: only one warehouse
-      const body: Record<string, string> = { search: raw, warehouseCode: wc };
-
+      const wc = tag.warehouseCode || "STOO1";
       const res = await fetch(`/api/wms/warehouse/location-search`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify(body),
+        body: JSON.stringify({ search: raw, warehouseCode: wc }),
       });
       const json = await res.json().catch(() => null);
 
@@ -354,60 +261,39 @@ function StowFlowInner() {
         return;
       }
 
-      // Response: { data: [{warehouseCd, zoneName, aisleName, bayName, levelName, positionName}] }
       const dataRaw = json?.data;
       const d = (Array.isArray(dataRaw) ? dataRaw[0] : dataRaw) as Record<string, unknown> | null ?? null;
 
-      // DEBUG: log full location-search response to console
-      console.log("[location-search] raw response:", JSON.stringify(json));
-      console.log("[location-search] first item (d):", JSON.stringify(d));
-
       if (!d) {
-        setLocError(`Location "${raw}" not found. API: ${JSON.stringify(json).slice(0, 200)}`);
+        setLocError(`Location "${raw}" not found.`);
         setLocLoading(false);
         return;
       }
 
-      const zoneName    = String(d.zoneName    ?? d.zone     ?? "");
-      const aisleName   = String(d.aisleName   ?? d.aisle    ?? "");
-      const bayName     = String(d.bayName     ?? d.bay      ?? "");
-      const levelName   = String(d.levelName   ?? d.level    ?? "");
-      const positionName= String(d.positionName ?? d.position ?? "");
-
-      // locationCode: use zone/aisle/bay/level/position if available (matches dashboard display)
-      // fallback to explicit API field, then raw barcode
+      const zoneName     = String(d.zoneName    ?? d.zone     ?? "");
+      const aisleName    = String(d.aisleName   ?? d.aisle    ?? "");
+      const bayName      = String(d.bayName     ?? d.bay      ?? "");
+      const levelName    = String(d.levelName   ?? d.level    ?? "");
+      const positionName = String(d.positionName ?? d.position ?? "");
       const locationCode = String(
         d.locationCode ?? d.code ??
         ([zoneName, aisleName, bayName, levelName, positionName].filter(Boolean).join(" / ") || raw)
       );
       const locationId = d.locationId != null ? String(d.locationId) : (d.id != null ? String(d.id) : "");
-      // warehouseCd from location-search response is the location's own ID (e.g. "W20260416000006")
-      // This is what the WMS assign API expects — NOT the general warehouse code
       const locationWarehouseCd = d.warehouseCd != null ? String(d.warehouseCd) : "";
 
-      const loc: LocationInfo = {
-        locationCode,
-        locationId,
-        warehouseCd: locationWarehouseCd,
-        zoneName,
-        aisleName,
-        bayName,
-        levelName,
-        positionName,
-      };
+      const loc: LocationInfo = { locationCode, locationId, warehouseCd: locationWarehouseCd, zoneName, aisleName, bayName, levelName, positionName };
 
-      // ── Occupancy check ─────────────────────────────────────
-      const blocked = await checkLocationOccupied(loc, wc);
+      // ── Occupancy check (after location-search, no concurrent requests) ──
+      const blocked = await checkLocationOccupied(loc, wc, tag.customerCode, tag.sku);
       if (blocked) {
         setLocError(blocked);
         setLocLoading(false);
         return;
       }
-      // ────────────────────────────────────────────────────────
 
       rawScanRef.current = raw;
       locationRef.current = loc;
-      // Persist to sessionStorage so re-mounts / stale closures can't lose it
       sessionStorage.setItem("stow_loc", JSON.stringify(loc));
       setLocation(loc);
       setLocScan("");
@@ -420,7 +306,6 @@ function StowFlowInner() {
 
   // ── Assign ───────────────────────────────────────────────
   async function handleAssign() {
-    // Layer of fallbacks: ref → state → sessionStorage
     let loc = locationRef.current ?? location;
     if (!loc) {
       try {
@@ -432,19 +317,13 @@ function StowFlowInner() {
     setAssigning(true);
     setAssignError("");
     try {
-      // Normalize expireDate to YYYYMMDD (API requires no dashes)
       const expireDate = tag.expireDate?.replace(/-/g, "").slice(0, 8) ?? "";
       const wc = tag.warehouseCode || "STOO1";
-
-      const finalLocationCode = loc.locationCode || rawScanRef.current;
-      const finalLocationId   = loc.locationId ?? ""; // empty string same as dashboard
 
       const payload = {
         receiveOrderCode: tag.orderCode,
         receiveItemId: tag.receiveItemId,
         warehouseCode: wc,
-        // Use the location's own warehouseCd from location-search (e.g. "W20260416000006")
-        // Fall back to tag's warehouseCd only if location lookup didn't return one
         warehouseCd: loc.warehouseCd || tag.warehouseCd || wc,
         customerCode: tag.customerCode,
         productSku: tag.sku,
@@ -452,8 +331,8 @@ function StowFlowInner() {
         expireDate,
         itemCondition: tag.itemCondition ?? "GOOD",
         qty,
-        locationCode: finalLocationCode,
-        locationId: finalLocationId,
+        locationCode: loc.locationCode || rawScanRef.current,
+        locationId: loc.locationId ?? "",
       };
 
       const res = await fetch("/api/wms/receiving/assign", {
@@ -470,19 +349,39 @@ function StowFlowInner() {
         );
       }
 
-      // Mark stow tag as done in Redis
+      const remaining = tag.qty - qty;
+
       if (tagId) {
-        await fetch(`/api/stow-tags/${tagId}`, { method: "PATCH" });
+        // Partial stow → update remaining qty in Redis (keep pending)
+        // Full stow   → mark as done
+        await fetch(`/api/stow-tags/${tagId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ remainingQty: remaining }),
+        });
       }
 
-      // Invalidate occupied cache — inventory just changed
-      invalidateOccupiedCache(wc);
-
+      setRemainingQty(remaining);
       setStep("done");
     } catch (e) {
       setAssignError(e instanceof Error ? e.message : "Assign failed");
     }
     setAssigning(false);
+  }
+
+  // ── Continue stowing remaining qty ──────────────────────
+  function handleStowRemaining() {
+    // Reset to qty step with updated qty = remainingQty
+    if (!tag) return;
+    setQty(remainingQty);
+    setLocation(null);
+    locationRef.current = null;
+    setLocScan("");
+    setLocError("");
+    setAssignError("");
+    // Update tag's qty locally so UI reflects the remaining
+    setTag({ ...tag, qty: remainingQty });
+    setStep("qty");
   }
 
   // ── Loading ──────────────────────────────────────────────
@@ -494,7 +393,6 @@ function StowFlowInner() {
     );
   }
 
-  // ── Load error ───────────────────────────────────────────
   if (loadError || !tag) {
     return (
       <div className="min-h-screen flex flex-col" style={DARK}>
@@ -523,48 +421,90 @@ function StowFlowInner() {
     );
   }
 
-  // ── Done ─────────────────────────────────────────────────
+  // ── Done screen ──────────────────────────────────────────
   if (step === "done") {
+    const isPartial = remainingQty > 0;
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-6" style={DARK}>
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-5" style={DARK}>
+        {/* Icon */}
         <div className="w-20 h-20 rounded-full flex items-center justify-center"
-          style={{ background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)" }}>
-          <CheckCircle2 className="w-10 h-10 text-green-400" />
+          style={isPartial
+            ? { background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)" }
+            : { background: "rgba(34,197,94,0.15)",  border: "1px solid rgba(34,197,94,0.3)" }}>
+          <CheckCircle2 className={`w-10 h-10 ${isPartial ? "text-amber-400" : "text-green-400"}`} />
         </div>
+
+        {/* Title */}
         <div className="text-center">
-          <p className="text-2xl font-bold text-white mb-1">Stow Complete!</p>
-          <p className="text-sm text-slate-400 font-mono">{tag.sku} × {qty}</p>
+          <p className="text-2xl font-bold text-white mb-1">
+            {isPartial ? "Partial Stow Done" : "Stow Complete!"}
+          </p>
+          <p className="text-sm text-slate-400 font-mono">{tag.sku} × {qty} stowed</p>
+          {isPartial && (
+            <p className="text-sm font-semibold mt-1"
+              style={{ color: "#fbbf24" }}>
+              {remainingQty} remaining — stow to another location
+            </p>
+          )}
         </div>
+
+        {/* Summary */}
         <div className="w-full rounded-2xl p-5 space-y-3" style={GLASS}>
           {[
-            ["SKU", tag.sku],
-            ["Qty Stowed", String(qty)],
-            ["Location", location ? locLabel(location) : "-"],
-            ...(tag.lotNo ? [["LOT", tag.lotNo]] : []),
+            ["SKU",          tag.sku],
+            ["Stowed",       String(qty)],
+            ...(isPartial ? [["Remaining", String(remainingQty)]] : []),
+            ["Location",     location ? locLabel(location) : "-"],
+            ...(tag.lotNo    ? [["LOT", tag.lotNo]] : []),
             ...(tag.expireDate ? [["EXP", tag.expireDate.slice(0, 10)]] : []),
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between text-sm">
               <span className="text-slate-400">{k}</span>
-              <span className={`font-mono font-semibold ${k === "Qty Stowed" ? "text-green-400" : "text-white"}`}>{v}</span>
+              <span className={`font-mono font-semibold ${
+                k === "Stowed"     ? "text-green-400" :
+                k === "Remaining"  ? "text-amber-400" : "text-white"
+              }`}>{v}</span>
             </div>
           ))}
         </div>
-        <div className="flex gap-3 w-full">
-          <button
-            onClick={() => router.replace("/inbound")}
-            className="flex-1 flex items-center justify-center gap-2 h-14 rounded-2xl text-sm font-bold"
-            style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)", color: "#93c5fd" }}
-          >
-            <RotateCcw className="w-4 h-4" /> Stow Another
-          </button>
-          <button
-            onClick={() => router.replace("/home")}
-            className="h-14 px-6 rounded-2xl text-sm font-bold text-slate-400"
-            style={GLASS}
-          >
-            Home
-          </button>
-        </div>
+
+        {/* Actions */}
+        {isPartial ? (
+          <div className="flex flex-col gap-3 w-full">
+            <button
+              onClick={handleStowRemaining}
+              className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+              style={{ background: "#d97706" }}
+            >
+              <ArrowRight className="w-4 h-4" />
+              Stow Remaining {remainingQty} →
+            </button>
+            <button
+              onClick={() => router.replace("/inbound")}
+              className="w-full h-12 rounded-2xl text-sm font-semibold text-slate-400 active:scale-[0.98] transition-all"
+              style={GLASS}
+            >
+              Save & Come Back Later
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-3 w-full">
+            <button
+              onClick={() => router.replace("/inbound")}
+              className="flex-1 flex items-center justify-center gap-2 h-14 rounded-2xl text-sm font-bold"
+              style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)", color: "#93c5fd" }}
+            >
+              <RotateCcw className="w-4 h-4" /> Stow Another
+            </button>
+            <button
+              onClick={() => router.replace("/home")}
+              className="h-14 px-6 rounded-2xl text-sm font-bold text-slate-400"
+              style={GLASS}
+            >
+              Home
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -585,7 +525,7 @@ function StowFlowInner() {
       <StepBar current={step} />
 
       <main className="flex-1 px-4 pt-4 pb-8 space-y-3 overflow-y-auto">
-        {/* Item info (always visible) */}
+        {/* Item info */}
         <div className="rounded-2xl p-4" style={GLASS}>
           <div className="flex items-center gap-2 mb-2">
             <Package className="w-4 h-4 text-green-400" />
@@ -601,7 +541,7 @@ function StowFlowInner() {
               </div>
             </div>
             <div className="text-right flex-shrink-0">
-              <p className="text-xs text-slate-500 mb-0.5">Tag Qty</p>
+              <p className="text-xs text-slate-500 mb-0.5">Remaining</p>
               <p className="text-xl font-bold text-white">{tag.qty}</p>
             </div>
           </div>
@@ -611,7 +551,10 @@ function StowFlowInner() {
         {step === "qty" && (
           <div className="rounded-2xl p-4 space-y-4"
             style={{ ...GLASS, border: "1px solid rgba(59,130,246,0.3)" }}>
-            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider">Enter Stow Quantity</p>
+            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider">
+              Enter Stow Quantity
+              {tag.qty > 0 && <span className="ml-2 text-slate-500 normal-case">(max {tag.qty})</span>}
+            </p>
             <div className="flex items-center gap-3">
               <button onClick={() => setQty((q) => Math.max(1, q - 1))}
                 className="w-12 h-12 rounded-xl text-slate-300 text-2xl font-bold active:scale-95 transition-all"
@@ -626,14 +569,13 @@ function StowFlowInner() {
                 className="w-12 h-12 rounded-xl text-slate-300 text-2xl font-bold active:scale-95 transition-all"
                 style={GLASS}>+</button>
             </div>
+            {qty < tag.qty && (
+              <p className="text-xs text-amber-400 text-center">
+                {tag.qty - qty} will remain after this stow
+              </p>
+            )}
             <button
-              onClick={() => {
-                if (qty > 0) {
-                  // Start building occupied-location cache in background while user scans
-                  startPrefetch(tag.warehouseCode || "STOO1");
-                  setStep("location");
-                }
-              }}
+              onClick={() => { if (qty > 0) setStep("location"); }}
               className="w-full py-4 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               style={{ background: "#3b82f6" }}
             >
@@ -683,61 +625,65 @@ function StowFlowInner() {
         )}
 
         {/* ── CONFIRM ── */}
-        {step === "confirm" && (() => { const loc = locationRef.current ?? location; return loc ? (
-          <div className="space-y-3">
-            <div className="rounded-2xl p-4"
-              style={{ ...GLASS, border: "1px solid rgba(139,92,246,0.3)" }}>
-              <div className="flex items-center gap-2 mb-2">
-                <MapPin className="w-4 h-4 text-purple-400" />
-                <p className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Location</p>
-              </div>
-              <p className="text-xl font-bold font-mono text-white">{locLabel(loc)}</p>
-              <p className="text-xs text-slate-500 mt-1 font-mono">code: {loc.locationCode}</p>
-              <p className="text-xs text-slate-500 font-mono">id: {loc.locationId || "(empty)"}</p>
-            </div>
-
-            <div className="rounded-2xl p-4 space-y-3"
-              style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.25)" }}>
-              <div className="flex items-center gap-2 mb-1">
-                <CheckCircle2 className="w-4 h-4 text-green-400" />
-                <p className="text-xs font-semibold text-green-300 uppercase tracking-wider">Confirm Stow</p>
-              </div>
-              {[
-                ["SKU", tag?.sku ?? ""],
-                ["Qty", String(qty)],
-                ["Location", locLabel(loc)],
-                ...(tag?.lotNo ? [["LOT", tag.lotNo]] : []),
-                ...(tag?.expireDate ? [["EXP", tag.expireDate.slice(0, 10)]] : []),
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between text-sm">
-                  <span className="text-slate-400">{k}</span>
-                  <span className="font-mono font-semibold text-white">{v}</span>
+        {step === "confirm" && (() => {
+          const loc = locationRef.current ?? location;
+          return loc ? (
+            <div className="space-y-3">
+              <div className="rounded-2xl p-4"
+                style={{ ...GLASS, border: "1px solid rgba(139,92,246,0.3)" }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <MapPin className="w-4 h-4 text-purple-400" />
+                  <p className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Location</p>
                 </div>
-              ))}
-            </div>
-
-            {assignError && (
-              <div className="flex items-start gap-1.5 text-xs text-red-400 px-1">
-                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                <span className="whitespace-pre-line">{assignError}</span>
+                <p className="text-xl font-bold font-mono text-white">{locLabel(loc)}</p>
+                <p className="text-xs text-slate-500 mt-1 font-mono">code: {loc.locationCode}</p>
+                <p className="text-xs text-slate-500 font-mono">id: {loc.locationId || "(empty)"}</p>
               </div>
-            )}
 
-            <div className="flex gap-2">
-              <button onClick={() => setStep("location")}
-                className="px-4 py-4 rounded-xl text-sm font-semibold text-slate-400 active:scale-95 transition-all"
-                style={GLASS}>← Back</button>
-              <button
-                onClick={handleAssign} disabled={assigning}
-                className="flex-1 py-4 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50"
-                style={{ background: "#16a34a" }}
-              >
-                {assigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {assigning ? "Assigning..." : "Confirm Stow"}
-              </button>
+              <div className="rounded-2xl p-4 space-y-3"
+                style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.25)" }}>
+                <div className="flex items-center gap-2 mb-1">
+                  <CheckCircle2 className="w-4 h-4 text-green-400" />
+                  <p className="text-xs font-semibold text-green-300 uppercase tracking-wider">Confirm Stow</p>
+                </div>
+                {[
+                  ["SKU",      tag?.sku ?? ""],
+                  ["Qty",      String(qty)],
+                  ...(qty < tag.qty ? [["After this", `${tag.qty - qty} remaining`]] : []),
+                  ["Location", locLabel(loc)],
+                  ...(tag?.lotNo      ? [["LOT", tag.lotNo]] : []),
+                  ...(tag?.expireDate ? [["EXP", tag.expireDate.slice(0, 10)]] : []),
+                ].map(([k, v]) => (
+                  <div key={k} className="flex justify-between text-sm">
+                    <span className="text-slate-400">{k}</span>
+                    <span className={`font-mono font-semibold ${k === "After this" ? "text-amber-400" : "text-white"}`}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {assignError && (
+                <div className="flex items-start gap-1.5 text-xs text-red-400 px-1">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span className="whitespace-pre-line">{assignError}</span>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button onClick={() => setStep("location")}
+                  className="px-4 py-4 rounded-xl text-sm font-semibold text-slate-400 active:scale-95 transition-all"
+                  style={GLASS}>← Back</button>
+                <button
+                  onClick={handleAssign} disabled={assigning}
+                  className="flex-1 py-4 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50"
+                  style={{ background: "#16a34a" }}
+                >
+                  {assigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  {assigning ? "Assigning..." : "Confirm Stow"}
+                </button>
+              </div>
             </div>
-          </div>
-        ) : null; })()}
+          ) : null;
+        })()}
       </main>
     </div>
   );
