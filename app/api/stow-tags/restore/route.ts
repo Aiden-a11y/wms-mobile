@@ -40,7 +40,7 @@ async function handler(commit: boolean) {
         // If this is the 8809864762305 tag with original qty 252,
         // set remaining qty to 166 (252 - 86 stowed)
         if (t.sku === "8809864762305" && t.qty === 252) {
-          restored.qty = 166;
+          restored.qty = 168;
         }
         await redis.hset(HASH_KEY, { [String(t.id)]: JSON.stringify(restored) });
       }
