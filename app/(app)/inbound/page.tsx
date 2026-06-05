@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, ScanLine, MapPin, Tag, AlertCircle } from "lucide-react";
+import { ChevronLeft, RefreshCw, ScanLine, MapPin, Tag, AlertCircle, Loader2 } from "lucide-react";
+import { authHeaders } from "@/lib/api";
 import type { PersistedStowTag } from "@/lib/stow-tags";
 
 const DARK = { background: "radial-gradient(ellipse at 50% 0%, #1e2d4a 0%, #080d1a 60%)" };
@@ -12,6 +13,21 @@ const GLASS = {
   border: "1px solid rgba(255,255,255,0.08)",
 };
 
+interface InvLoc {
+  locationCode: string;
+  zone: string; aisle: string; bay: string; level: string; position: string;
+  qty: number;
+}
+
+function buildLocCode(r: Record<string, unknown>) {
+  const z = String(r.zoneName  ?? r.zone  ?? "");
+  const a = String(r.aisleName ?? r.aisle ?? "");
+  const b = String(r.bayName   ?? r.bay   ?? "");
+  const l = String(r.levelName ?? r.level ?? "");
+  const p = String(r.positionName ?? r.position ?? "");
+  return String(r.locationCode ?? [z, a, b, l, p].filter(Boolean).join("/"));
+}
+
 export default function StowListPage() {
   const router = useRouter();
   const [tags, setTags] = useState<PersistedStowTag[]>([]);
@@ -19,6 +35,9 @@ export default function StowListPage() {
   const [error, setError] = useState("");
   const [scan, setScan] = useState("");
   const [scanError, setScanError] = useState("");
+  // invMap: key = "customerCode|sku" → locations
+  const [invMap, setInvMap] = useState<Record<string, InvLoc[]>>({});
+  const [invLoading, setInvLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function loadTags() {
@@ -32,11 +51,65 @@ export default function StowListPage() {
         setLoading(false);
         return;
       }
-      setTags(Array.isArray(json) ? json : []);
+      const loaded: PersistedStowTag[] = Array.isArray(json) ? json : [];
+      setTags(loaded);
+      fetchInventory(loaded);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
     }
     setLoading(false);
+  }
+
+  async function fetchInventory(tagList: PersistedStowTag[]) {
+    if (tagList.length === 0) return;
+    setInvLoading(true);
+
+    // Deduplicate by "customerCode|sku"
+    const pairs = Array.from(
+      new Map(
+        tagList.map((t) => [`${t.customerCode}|${t.sku}`, { customerCode: t.customerCode, sku: t.sku, warehouseCode: t.warehouseCode || "STOO1" }])
+      ).values()
+    );
+
+    const newMap: Record<string, InvLoc[]> = {};
+
+    await Promise.all(
+      pairs.map(async ({ customerCode, sku, warehouseCode }) => {
+        const key = `${customerCode}|${sku}`;
+        try {
+          const r = await fetch("/api/wms/inventory/detail", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ warehouseCode, customerCode, productSku: sku }),
+          });
+          const j = await r.json().catch(() => null);
+          const dataField = j?.data;
+          const items: Record<string, unknown>[] =
+            Array.isArray(dataField)       ? dataField       :
+            Array.isArray(dataField?.list) ? dataField.list  :
+            Array.isArray(j)               ? j               : [];
+
+          newMap[key] = items
+            .map((item) => ({
+              locationCode: buildLocCode(item),
+              zone:     String(item.zoneName  ?? item.zone  ?? ""),
+              aisle:    String(item.aisleName ?? item.aisle ?? ""),
+              bay:      String(item.bayName   ?? item.bay   ?? ""),
+              level:    String(item.levelName ?? item.level ?? ""),
+              position: String(item.positionName ?? item.position ?? ""),
+              qty:      Number(item.qty ?? item.availableQty ?? 0),
+            }))
+            .filter((loc) => loc.qty > 0)
+            .sort((a, b) => {
+              const n = (s: string) => parseInt(s.replace(/\D/g, "") || "0", 10);
+              return n(a.aisle) - n(b.aisle) || n(a.bay) - n(b.bay) || n(a.level) - n(b.level);
+            });
+        } catch { newMap[key] = []; }
+      })
+    );
+
+    setInvMap(newMap);
+    setInvLoading(false);
   }
 
   useEffect(() => { loadTags(); }, []);
@@ -50,11 +123,7 @@ export default function StowListPage() {
     if (!v) return;
     setScanError("");
     const match = tags.find((t) => t.barcodeValue === v);
-    if (match) {
-      setScan("");
-      goStow(match);
-      return;
-    }
+    if (match) { setScan(""); goStow(match); return; }
     setScanError(`"${v}" not found in pending tags`);
   }
 
@@ -76,7 +145,6 @@ export default function StowListPage() {
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-8 space-y-3 overflow-y-auto">
-        {/* Server error banner */}
         {error && (
           <div className="rounded-2xl p-4 flex items-start gap-3"
             style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
@@ -119,10 +187,14 @@ export default function StowListPage() {
             <p className="text-xs font-semibold text-amber-400">
               {tags.length} pending tag{tags.length !== 1 ? "s" : ""}
             </p>
+            {invLoading && (
+              <span className="flex items-center gap-1 text-xs text-slate-500 ml-auto">
+                <Loader2 className="w-3 h-3 animate-spin" /> loading locations…
+              </span>
+            )}
           </div>
         )}
 
-        {/* Skeleton */}
         {loading && (
           <div className="space-y-3">
             {[...Array(3)].map((_, i) => (
@@ -132,7 +204,6 @@ export default function StowListPage() {
           </div>
         )}
 
-        {/* Empty */}
         {!loading && !error && tags.length === 0 && (
           <div className="text-center py-16">
             <p className="text-slate-500 text-sm">No pending stow tags</p>
@@ -153,39 +224,70 @@ export default function StowListPage() {
               </span>
             </div>
             <div>
-              {orderTags.map((tag, i) => (
-                <div
-                  key={tag.id}
-                  className="flex items-center gap-3 px-4 py-3"
-                  style={i < orderTags.length - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}
-                >
+              {orderTags.map((tag, i) => {
+                const invKey = `${tag.customerCode}|${tag.sku}`;
+                const locs = invMap[invKey];
+                return (
                   <div
-                    className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)" }}
+                    key={tag.id}
+                    className="px-4 py-3"
+                    style={i < orderTags.length - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}
                   >
-                    <span className="text-blue-300 font-bold text-xs">T{tag.tagNo}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-sm font-bold text-white">{tag.sku}</span>
-                      <span className="text-xs font-bold text-blue-400">×{tag.qty}</span>
+                    {/* Tag row */}
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)" }}
+                      >
+                        <span className="text-blue-300 font-bold text-xs">T{tag.tagNo}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-mono text-sm font-bold text-white">{tag.sku}</span>
+                          <span className="text-xs font-bold text-blue-400">×{tag.qty}</span>
+                        </div>
+                        <div className="flex gap-2 mt-0.5 text-xs text-slate-500">
+                          {tag.lotNo && <span>LOT: {tag.lotNo}</span>}
+                          {tag.expireDate && <span>EXP: {tag.expireDate.slice(0, 10)}</span>}
+                          {!tag.lotNo && !tag.expireDate && <span className="truncate">{tag.productName}</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => goStow(tag)}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl flex-shrink-0 active:scale-95 transition-all"
+                        style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)", color: "#93c5fd" }}
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        Stow
+                      </button>
                     </div>
-                    <div className="flex gap-2 mt-0.5 text-xs text-slate-500">
-                      {tag.lotNo && <span>LOT: {tag.lotNo}</span>}
-                      {tag.expireDate && <span>EXP: {tag.expireDate.slice(0, 10)}</span>}
-                      {!tag.lotNo && !tag.expireDate && <span className="truncate">{tag.productName}</span>}
-                    </div>
+
+                    {/* Inventory locations */}
+                    {locs && locs.length > 0 && (
+                      <div className="mt-2.5 ml-12 space-y-1">
+                        <p className="text-xs text-slate-600 uppercase tracking-wider mb-1">Current Stock</p>
+                        {locs.map((loc, li) => (
+                          <div key={li} className="flex items-center gap-2">
+                            <MapPin className="w-3 h-3 text-slate-600 flex-shrink-0" />
+                            <span className="font-mono text-xs text-slate-400">{loc.locationCode}</span>
+                            <span className="text-xs text-slate-500 ml-auto">×{loc.qty}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {locs && locs.length === 0 && (
+                      <div className="mt-2 ml-12">
+                        <p className="text-xs text-slate-600">No stock in system</p>
+                      </div>
+                    )}
+                    {!locs && invLoading && (
+                      <div className="mt-2 ml-12">
+                        <div className="h-3 w-32 rounded animate-pulse" style={{ background: "rgba(255,255,255,0.06)" }} />
+                      </div>
+                    )}
                   </div>
-                  <button
-                    onClick={() => goStow(tag)}
-                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl flex-shrink-0 active:scale-95 transition-all"
-                    style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)", color: "#93c5fd" }}
-                  >
-                    <MapPin className="w-3.5 h-3.5" />
-                    Stow
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))}
