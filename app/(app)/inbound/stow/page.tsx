@@ -309,50 +309,28 @@ function StowFlowInner() {
     try {
       const wc = tag.warehouseCode || "STOO1";
 
-      // Try GET (dashboard-confirmed method) first, then POST as fallback
-      let json: unknown = null;
-      let ok = false;
-
-      const getParams = new URLSearchParams({ q: raw, warehouseCode: wc });
-      const getRes = await fetch(`/api/wms/warehouse/location-search?${getParams}`, {
+      // POST with { search, warehouseCode } — confirmed correct from network capture
+      const res = await fetch(`/api/wms/warehouse/location-search`, {
+        method: "POST",
         headers: authHeaders(),
-      }).catch(() => null);
+        body: JSON.stringify({ search: raw, warehouseCode: wc }),
+      });
+      const json = await res.json().catch(() => null);
 
-      if (getRes) {
-        json = await getRes.json().catch(() => null);
-        ok = getRes.ok;
-      }
-
-      // Fallback: POST with body (original method)
-      if (!ok) {
-        const postRes = await fetch(`/api/wms/warehouse/location-search`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ search: raw, q: raw, warehouseCode: wc }),
-        }).catch(() => null);
-        if (postRes) {
-          json = await postRes.json().catch(() => null);
-          ok = postRes.ok;
-        }
-      }
-
-      if (!ok) {
-        const j = json as Record<string, unknown> | null;
+      if (!res.ok) {
         setLocError(
-          `Location API error: ${j?.message ?? j?.msg ?? JSON.stringify(j)?.slice(0, 200) ?? "No response"}\n` +
-          `(raw barcode: ${raw}, warehouse: ${wc})`
+          `Location API error ${res.status}: ${(json as Record<string,unknown>)?.message ?? JSON.stringify(json)?.slice(0, 200)}\n` +
+          `(barcode: ${raw}, warehouse: ${wc})`
         );
         setLocLoading(false);
         return;
       }
 
-      // Parse response — dashboard uses: data ?? list[0] ?? [0] ?? root
-      const j = json as Record<string, unknown>;
-      const dataRaw = j?.data ?? j?.list?.[0] ?? (Array.isArray(j) ? j[0] : null) ?? j;
+      const dataRaw = (json as Record<string,unknown>)?.data;
       const d = (Array.isArray(dataRaw) ? dataRaw[0] : dataRaw) as Record<string, unknown> | null ?? null;
 
-      if (!d || (!d.zoneName && !d.locationCode && !d.locationId && !d.aisleName)) {
-        setLocError(`Location "${raw}" not found.\nAPI response: ${JSON.stringify(json)?.slice(0, 200)}`);
+      if (!d) {
+        setLocError(`Location "${raw}" not found.\nAPI: ${JSON.stringify(json)?.slice(0, 200)}`);
         setLocLoading(false);
         return;
       }
