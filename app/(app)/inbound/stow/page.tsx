@@ -318,10 +318,14 @@ function StowFlowInner() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setLocError(
-          `Location API error ${res.status}: ${(json as Record<string,unknown>)?.message ?? JSON.stringify(json)?.slice(0, 200)}\n` +
-          `(barcode: ${raw}, warehouse: ${wc})`
-        );
+        if (res.status === 401) {
+          setLocError(`Session expired (401). Please go back and log in again.`);
+        } else {
+          setLocError(
+            `Location API error ${res.status}: ${(json as Record<string,unknown>)?.message ?? JSON.stringify(json)?.slice(0, 200)}\n` +
+            `(barcode: ${raw}, warehouse: ${wc})`
+          );
+        }
         setLocLoading(false);
         return;
       }
@@ -682,11 +686,15 @@ function StowFlowInner() {
               </p>
             )}
             <button
-              onClick={() => { if (qty > 0) setStep("location"); }}
-              className="w-full py-4 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+              onClick={() => { if (qty > 0 && !invLocsLoading) setStep("location"); }}
+              disabled={invLocsLoading}
+              className="w-full py-4 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-60"
               style={{ background: "#3b82f6" }}
             >
-              Next — Scan Location <MapPin className="w-4 h-4" />
+              {invLocsLoading
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Loading…</>
+                : <>Next — Scan Location <MapPin className="w-4 h-4" /></>
+              }
             </button>
           </div>
         )}
