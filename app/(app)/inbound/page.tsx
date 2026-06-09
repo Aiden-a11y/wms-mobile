@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, ScanLine, MapPin, Tag, AlertCircle, Loader2 } from "lucide-react";
+import { ChevronLeft, RefreshCw, ScanLine, MapPin, Tag, AlertCircle, Loader2, History } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import type { PersistedStowTag } from "@/lib/stow-tags";
 
@@ -162,6 +162,9 @@ export default function StowListPage() {
           <ChevronLeft className="w-6 h-6" />
         </button>
         <p className="text-base font-bold text-white flex-1">Stow Process</p>
+        <button onClick={() => router.push("/inbound/history")} className="p-1 text-slate-400 active:text-white" title="Stow history">
+          <History className="w-5 h-5" />
+        </button>
         <button onClick={loadTags} disabled={loading} className="p-1 text-slate-400 active:text-white">
           <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
         </button>

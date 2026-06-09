@@ -418,6 +418,24 @@ function StowFlowInner() {
         );
       }
 
+      // Record stow placement in our own log (backend only reflects it after the
+      // whole receiving order is completed, so we track it ourselves).
+      fetch("/api/stow-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sku: tag.sku,
+          productName: tag.productName,
+          qty,
+          locationCode: loc.locationCode || rawScanRef.current,
+          warehouseCode: wc,
+          customerCode: tag.customerCode,
+          orderCode: tag.orderCode,
+          lotNo: tag.lotNo ?? "",
+          expireDate,
+        }),
+      }).catch(() => { /* non-blocking */ });
+
       const remaining = tag.qty - qty;
 
       if (tagId) {
