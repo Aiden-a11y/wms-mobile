@@ -39,8 +39,20 @@ function arrOf(json: unknown): Record<string, unknown>[] {
   const d = (j?.data ?? j) as Record<string, unknown>;
   if (Array.isArray((d as { list?: unknown })?.list)) return (d as { list: Record<string, unknown>[] }).list;
   if (Array.isArray(d)) return d as unknown as Record<string, unknown>[];
+  if (Array.isArray((j as { list?: unknown })?.list)) return (j as { list: Record<string, unknown>[] }).list;
   if (Array.isArray(json)) return json as Record<string, unknown>[];
   return [];
+}
+
+const pad2 = (s: unknown) => String(s ?? "").trim().padStart(2, "0");
+function locKey(r: Record<string, unknown>): string {
+  return [
+    r.zoneName ?? r.zone ?? r.zoneCode,
+    r.aisleName ?? r.aisle ?? r.aisleCode,
+    r.bayName ?? r.bay ?? r.bayCode,
+    r.levelName ?? r.level ?? r.levelCode,
+    r.positionName ?? r.position ?? r.positionCode,
+  ].map(pad2).join("");
 }
 
 function buildLocCode(r: Record<string, unknown>): string {
@@ -67,13 +79,42 @@ function toStock(r: Record<string, unknown>): Stock {
 }
 
 async function detail(body: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+  return wmsList("inventory/detail", body);
+}
+
+async function wmsList(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>[]> {
   try {
-    const res = await fetch("/api/wms/inventory/detail", {
+    const res = await fetch(`/api/wms/${path}`, {
       method: "POST", headers: authHeaders(), body: JSON.stringify(body),
     });
     if (!res.ok) return [];
     return arrOf(await res.json());
   } catch { return []; }
+}
+
+/* Load ALL stock for the warehouse (per-customer paginated bulk — proven dashboard method). */
+async function loadAllStock(): Promise<Record<string, unknown>[]> {
+  const custs = await fetchCustomers();
+  const targets: (string | undefined)[] = custs.length ? custs : [undefined];
+  for (const ep of ["inventory/detail", "inventory/list"]) {
+    const acc: Record<string, unknown>[] = [];
+    let worked = false;
+    for (const c of targets) {
+      let page = 1;
+      while (true) {
+        const rows = await wmsList(ep, { warehouseCode: WH, customerCode: c || undefined, pageNum: page, pageSize: 500 });
+        if (rows.length === 0) break;
+        worked = true;
+        const skuSet = new Set(rows.map((r) => String(r.productSku ?? r.sku ?? "")));
+        acc.push(...rows);
+        if (skuSet.size < 2 && rows.length > 5) break; // looks like single-SKU detail, not a bulk list
+        if (rows.length < 500) break;
+        page++;
+      }
+    }
+    if (worked && acc.length) return acc;
+  }
+  return [];
 }
 
 async function fetchCustomers(): Promise<string[]> {
@@ -157,41 +198,29 @@ export default function InventoryMovePage() {
   /* ── STEP 2: load stock at FROM location ── */
   async function loadStock(loc: LocInfo) {
     setStock(null); setStockLoading(true); setStockMethod("");
-    const target = normLoc(loc.locationCode);
-    const match = (r: Record<string, unknown>) => normLoc(buildLocCode(r)) === target;
 
-    // (B) light path: location-only, no customer/sku
-    let rows = (await detail({ warehouseCode: WH, locationCode: loc.locationCode })).filter(match);
-    let method = "location-only";
+    // location matching: zero-padded parts (handles "1" vs "01"), or normalized full code
+    const fromKey = locKey({ zone: loc.zone, aisle: loc.aisle, bay: loc.bay, level: loc.level, position: loc.position });
+    const fromNorm = normLoc(loc.locationCode);
+    const match = (r: Record<string, unknown>) =>
+      (fromKey.replace(/0/g, "") !== "" && locKey(r) === fromKey) ||
+      (fromNorm !== "" && normLoc(buildLocCode(r)) === fromNorm);
 
-    // fallback 1: per-customer + locationCode
+    let rows: Record<string, unknown>[] = [];
+    let method = "";
+
+    // (B) light path first: single location-only call
+    const light = (await detail({ warehouseCode: WH, locationCode: loc.locationCode })).filter(match);
+    if (light.length) { rows = light; method = "location-only"; }
+
+    // (A) fallback: bulk load all stock + client-side location filter (dashboard method)
     if (rows.length === 0) {
-      const custs = await fetchCustomers();
-      for (const c of custs) {
-        const r = await detail({ warehouseCode: WH, customerCode: c, locationCode: loc.locationCode });
-        rows.push(...r.filter(match));
-      }
-      if (rows.length) method = "per-customer + location";
-
-      // fallback 2: bulk load + client filter
-      if (rows.length === 0) {
-        const acc: Record<string, unknown>[] = [];
-        for (const c of custs) {
-          let page = 1;
-          while (true) {
-            const r = await detail({ warehouseCode: WH, customerCode: c, pageNum: page, pageSize: 500 });
-            if (r.length === 0) break;
-            acc.push(...r);
-            if (r.length < 500) break;
-            page++;
-          }
-        }
-        rows = acc.filter(match);
-        if (rows.length) method = "bulk + filter";
-      }
+      const all = await loadAllStock();
+      rows = all.filter(match);
+      method = `bulk ${all.length} rows · ${rows.length} here`;
     }
 
-    // de-dup by sku|lot|exp|condition, keep qty
+    // de-dup by sku|lot|exp|condition
     const seen = new Map<string, Stock>();
     for (const r of rows) {
       const s = toStock(r);
