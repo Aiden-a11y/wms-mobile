@@ -14,7 +14,7 @@ const HDR = { borderBottom: "1px solid rgba(255,255,255,0.08)" };
 const GLASS = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" };
 const INPUT = { background: "rgba(255,255,255,0.07)", border: "2px solid rgba(59,130,246,0.5)" };
 
-type Step = "from" | "pick" | "to" | "done";
+type Step = "from" | "product" | "pick" | "to" | "done";
 
 interface LocInfo {
   locationCode: string;
@@ -33,6 +33,7 @@ interface Stock {
 
 /* ── helpers ──────────────────────────────────────────── */
 const normLoc = (s: string) => String(s).toLowerCase().replace(/[\s\-_/]+/g, "");
+const pad2 = (s: unknown) => String(s ?? "").trim().padStart(2, "0");
 
 function arrOf(json: unknown): Record<string, unknown>[] {
   const j = json as Record<string, unknown>;
@@ -44,7 +45,6 @@ function arrOf(json: unknown): Record<string, unknown>[] {
   return [];
 }
 
-const pad2 = (s: unknown) => String(s ?? "").trim().padStart(2, "0");
 function locKey(r: Record<string, unknown>): string {
   return [
     r.zoneName ?? r.zone ?? r.zoneCode,
@@ -54,7 +54,6 @@ function locKey(r: Record<string, unknown>): string {
     r.positionName ?? r.position ?? r.positionCode,
   ].map(pad2).join("");
 }
-
 function buildLocCode(r: Record<string, unknown>): string {
   const parts = [
     r.zoneName ?? r.zone ?? r.zoneCode,
@@ -65,7 +64,6 @@ function buildLocCode(r: Record<string, unknown>): string {
   ].map((v) => String(v ?? "")).filter(Boolean);
   return String(r.locationCode ?? (parts.length ? parts.join("-") : ""));
 }
-
 function toStock(r: Record<string, unknown>): Stock {
   return {
     productSku: String(r.productSku ?? r.sku ?? r.itemCode ?? ""),
@@ -78,45 +76,13 @@ function toStock(r: Record<string, unknown>): Stock {
   };
 }
 
-async function detail(body: Record<string, unknown>): Promise<Record<string, unknown>[]> {
-  return wmsList("inventory/detail", body);
-}
-
 async function wmsList(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>[]> {
   try {
-    const res = await fetch(`/api/wms/${path}`, {
-      method: "POST", headers: authHeaders(), body: JSON.stringify(body),
-    });
+    const res = await fetch(`/api/wms/${path}`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
     if (!res.ok) return [];
     return arrOf(await res.json());
   } catch { return []; }
 }
-
-/* Load ALL stock for the warehouse (per-customer paginated bulk — proven dashboard method). */
-async function loadAllStock(): Promise<{ rows: Record<string, unknown>[]; custCount: number; ep: string }> {
-  const custs = await fetchCustomers();
-  const targets: (string | undefined)[] = custs.length ? custs : [undefined];
-  for (const ep of ["inventory/detail", "inventory/list"]) {
-    const acc: Record<string, unknown>[] = [];
-    let worked = false;
-    for (const c of targets) {
-      let page = 1;
-      while (true) {
-        const rows = await wmsList(ep, { warehouseCode: WH, customerCode: c || undefined, pageNum: page, pageSize: 500 });
-        if (rows.length === 0) break;
-        worked = true;
-        const skuSet = new Set(rows.map((r) => String(r.productSku ?? r.sku ?? "")));
-        acc.push(...rows);
-        if (skuSet.size < 2 && rows.length > 5) break; // looks like single-SKU detail, not a bulk list
-        if (rows.length < 500) break;
-        page++;
-      }
-    }
-    if (worked && acc.length) return { rows: acc, custCount: custs.length, ep };
-  }
-  return { rows: [], custCount: custs.length, ep: "none" };
-}
-
 async function fetchCustomers(): Promise<string[]> {
   try {
     const r = await fetch(`/api/wms/combo/customer-by-warehouse/${WH}`, { headers: authHeaders() });
@@ -135,10 +101,11 @@ export default function InventoryMovePage() {
   const [fromLoading, setFromLoading] = useState(false);
   const [fromError, setFromError] = useState("");
 
-  const [stock, setStock] = useState<Stock[] | null>(null);
-  const [stockLoading, setStockLoading] = useState(false);
-  const [stockMethod, setStockMethod] = useState("");
+  const [prodScan, setProdScan] = useState("");
+  const [prodLoading, setProdLoading] = useState(false);
+  const [prodError, setProdError] = useState("");
 
+  const [stock, setStock] = useState<Stock[]>([]);
   const [sel, setSel] = useState<Stock | null>(null);
   const [qty, setQty] = useState(1);
 
@@ -150,12 +117,13 @@ export default function InventoryMovePage() {
   const [result, setResult] = useState<{ from: string; to: string; sku: string; qty: number } | null>(null);
 
   const fromRef = useRef<HTMLInputElement>(null);
+  const prodRef = useRef<HTMLInputElement>(null);
   const toRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (step === "from") setTimeout(() => fromRef.current?.focus(), 100); }, [step]);
+  useEffect(() => { if (step === "product") setTimeout(() => prodRef.current?.focus(), 100); }, [step]);
   useEffect(() => { if (step === "to") setTimeout(() => toRef.current?.focus(), 100); }, [step]);
 
-  /* resolve a scanned barcode → LocInfo via location-search */
   async function searchLocation(raw: string): Promise<LocInfo | null> {
     const res = await fetch("/api/wms/warehouse/location-search", {
       method: "POST", headers: authHeaders(),
@@ -176,7 +144,7 @@ export default function InventoryMovePage() {
     return { locationCode, warehouseCd, zone, aisle, bay, level, position };
   }
 
-  /* ── STEP 1: FROM scan ── */
+  /* STEP 1 — FROM scan */
   async function handleFromScan() {
     const raw = fromScan.trim();
     if (!raw) return;
@@ -185,66 +153,58 @@ export default function InventoryMovePage() {
       const loc = await searchLocation(raw);
       if (!loc) { setFromError(`Location "${raw}" not found.`); setFromLoading(false); return; }
       if (!loc.warehouseCd) { setFromError(`Location "${raw}" has no warehouseCd.`); setFromLoading(false); return; }
-      setFromLoc(loc);
-      setFromScan("");
-      setStep("pick");
-      loadStock(loc);
+      setFromLoc(loc); setFromScan(""); setProdError(""); setStep("product");
     } catch (e) {
       setFromError(e instanceof Error ? e.message : "Scan failed");
     }
     setFromLoading(false);
   }
 
-  /* ── STEP 2: load stock at FROM location ── */
-  async function loadStock(loc: LocInfo) {
-    setStock(null); setStockLoading(true); setStockMethod("");
+  /* STEP 2 — PRODUCT scan → stock at this bin */
+  async function handleProductScan() {
+    const sku = prodScan.trim();
+    if (!sku || !fromLoc) return;
+    setProdLoading(true); setProdError("");
+    try {
+      const fromKey = locKey({ zone: fromLoc.zone, aisle: fromLoc.aisle, bay: fromLoc.bay, level: fromLoc.level, position: fromLoc.position });
+      const fromNorm = normLoc(fromLoc.locationCode);
+      const match = (r: Record<string, unknown>) =>
+        (fromKey.replace(/0/g, "") !== "" && locKey(r) === fromKey) ||
+        (fromNorm !== "" && normLoc(buildLocCode(r)) === fromNorm);
 
-    // location matching: zero-padded parts (handles "1" vs "01"), or normalized full code
-    const fromKey = locKey({ zone: loc.zone, aisle: loc.aisle, bay: loc.bay, level: loc.level, position: loc.position });
-    const fromNorm = normLoc(loc.locationCode);
-    const match = (r: Record<string, unknown>) =>
-      (fromKey.replace(/0/g, "") !== "" && locKey(r) === fromKey) ||
-      (fromNorm !== "" && normLoc(buildLocCode(r)) === fromNorm);
-
-    let rows: Record<string, unknown>[] = [];
-    let method = "";
-
-    // (B) light path first: single location-only call
-    const lightRaw = await detail({ warehouseCode: WH, locationCode: loc.locationCode });
-    const light = lightRaw.filter(match);
-    if (light.length) { rows = light; method = `location-only · ${light.length}`; }
-
-    // (A) fallback: bulk load all stock + client-side location filter (dashboard method)
-    if (rows.length === 0) {
-      const all = await loadAllStock();
-      rows = all.rows.filter(match);
-      method = `key ${fromKey} · cust ${all.custCount} · ${all.ep} ${all.rows.length} rows · ${rows.length} here`;
-      // if bulk loaded rows but none matched, show sample row location keys to diagnose format
-      if (all.rows.length > 0 && rows.length === 0) {
-        const samples = all.rows.slice(0, 3).map((r) => locKey(r) || normLoc(buildLocCode(r))).join(", ");
-        method += ` · ex: ${samples}`;
+      // inventory/detail needs a SKU + customerCode → loop the (few) customers
+      const custs = await fetchCustomers();
+      const targets: (string | undefined)[] = custs.length ? custs : [undefined];
+      const rows: Record<string, unknown>[] = [];
+      for (const c of targets) {
+        const r = await wmsList("inventory/detail", { warehouseCode: WH, customerCode: c || undefined, productSku: sku });
+        rows.push(...r.filter(match));
       }
-    }
 
-    // de-dup by sku|lot|exp|condition
-    const seen = new Map<string, Stock>();
-    for (const r of rows) {
-      const s = toStock(r);
-      if (!s.productSku || s.qty <= 0) continue;
-      const k = `${s.productSku}|${s.lotNo}|${s.expireDate}|${s.itemCondition}`;
-      if (!seen.has(k)) seen.set(k, s);
+      const seen = new Map<string, Stock>();
+      for (const r of rows) {
+        const s = toStock(r);
+        if (!s.productSku || s.qty <= 0) continue;
+        const k = `${s.productSku}|${s.lotNo}|${s.expireDate}|${s.itemCondition}`;
+        if (!seen.has(k)) seen.set(k, s);
+      }
+      const list = [...seen.values()];
+      if (list.length === 0) {
+        setProdError(`"${sku}" not found at ${fromLoc.locationCode}.\nCheck the product or scan a different bin.`);
+        setProdLoading(false); return;
+      }
+      setStock(list);
+      setProdScan("");
+      if (list.length === 1) { setSel(list[0]); setQty(1); }
+      else setSel(null);
+      setStep("pick");
+    } catch (e) {
+      setProdError(e instanceof Error ? e.message : "Product scan failed");
     }
-    setStock([...seen.values()]);
-    setStockMethod(method);
-    setStockLoading(false);
+    setProdLoading(false);
   }
 
-  function pickStock(s: Stock) {
-    setSel(s);
-    setQty(1);
-  }
-
-  /* ── STEP 3: TO scan + move ── */
+  /* STEP 3 — TO scan + move */
   async function handleToScan() {
     const raw = toScan.trim();
     if (!raw || !sel || !fromLoc) return;
@@ -254,8 +214,7 @@ export default function InventoryMovePage() {
       if (!loc) { setToError(`Location "${raw}" not found.`); setToLoading(false); return; }
       if (!loc.warehouseCd) { setToError(`Location "${raw}" has no warehouseCd.`); setToLoading(false); return; }
       if (normLoc(loc.locationCode) === normLoc(fromLoc.locationCode)) {
-        setToError("TO location is the same as FROM. Scan a different location.");
-        setToLoading(false); return;
+        setToError("TO is the same as FROM. Scan a different location."); setToLoading(false); return;
       }
       await submitMove(loc);
     } catch (e) {
@@ -285,9 +244,7 @@ export default function InventoryMovePage() {
       toItemCondition: sel.itemCondition || "GOOD",
     };
     try {
-      const res = await fetch("/api/wms/inventory/move", {
-        method: "POST", headers: authHeaders(), body: JSON.stringify(payload),
-      });
+      const res = await fetch("/api/wms/inventory/move", { method: "POST", headers: authHeaders(), body: JSON.stringify(payload) });
       const json = await res.json().catch(() => null) as Record<string, unknown> | null;
       if (!res.ok || json?.isSuccess === false || json?.success === false) {
         throw new Error(String(json?.message ?? json?.msg ?? `Move failed (HTTP ${res.status})`));
@@ -302,142 +259,122 @@ export default function InventoryMovePage() {
 
   function reset() {
     setStep("from"); setFromScan(""); setFromLoc(null); setFromError("");
-    setStock(null); setSel(null); setQty(1); setToScan(""); setToError(""); setResult(null);
+    setProdScan(""); setProdError(""); setStock([]); setSel(null); setQty(1);
+    setToScan(""); setToError(""); setResult(null);
+  }
+  function back() {
+    if (step === "from") router.back();
+    else if (step === "product") { setStep("from"); }
+    else if (step === "pick") { setStep("product"); setSel(null); }
+    else if (step === "to") { setStep("pick"); }
+    else reset();
   }
 
   /* ── UI ─────────────────────────────────────────────── */
   return (
     <div className="min-h-screen flex flex-col" style={DARK}>
       <header className="px-5 py-4 flex items-center gap-3 flex-shrink-0" style={HDR}>
-        <button
-          onClick={() => (step === "from" ? router.back() : step === "pick" ? reset() : setStep("pick"))}
-          className="p-1 text-slate-400 active:text-white transition-colors"
-        >
+        <button onClick={back} className="p-1 text-slate-400 active:text-white transition-colors">
           <ChevronLeft className="w-6 h-6" />
         </button>
         <div className="flex-1">
           <p className="text-base font-bold text-white">Simple Move</p>
           <p className="text-[11px] text-slate-400">
             {step === "from" && "Step 1 · Scan FROM location"}
-            {step === "pick" && "Step 2 · Select item & qty"}
-            {step === "to" && "Step 3 · Scan TO location"}
+            {step === "product" && "Step 2 · Scan product"}
+            {step === "pick" && "Step 3 · Confirm item & qty"}
+            {step === "to" && "Step 4 · Scan TO location"}
             {step === "done" && "Done"}
           </p>
         </div>
       </header>
 
       <main className="flex-1 overflow-y-auto p-5">
-        {/* STEP 1 — FROM SCAN */}
+        {/* STEP 1 — FROM */}
         {step === "from" && (
           <div className="flex flex-col gap-4">
-            <div className="rounded-2xl p-5" style={GLASS}>
-              <div className="flex items-center gap-2 mb-3 text-blue-300">
-                <ScanLine className="w-5 h-5" />
-                <span className="text-sm font-semibold">FROM Location</span>
-              </div>
-              <input
-                ref={fromRef}
-                value={fromScan}
-                onChange={(e) => setFromScan(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleFromScan()}
-                placeholder="Scan or type location barcode"
-                className="w-full rounded-xl px-4 py-3 text-white text-base outline-none placeholder:text-slate-500"
-                style={INPUT}
-                autoComplete="off"
-              />
-              <button
-                onClick={handleFromScan}
-                disabled={fromLoading || !fromScan.trim()}
-                className="mt-3 w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-40"
-                style={{ background: "#2563eb" }}
-              >
-                {fromLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
-                Load items here
-              </button>
-            </div>
+            <ScanCard
+              label="FROM Location" color="#60a5fa" inputRef={fromRef}
+              value={fromScan} onChange={setFromScan} onScan={handleFromScan}
+              placeholder="Scan or type location barcode" loading={fromLoading}
+              btn="Next: scan product"
+            />
             {fromError && <ErrorBox msg={fromError} />}
           </div>
         )}
 
-        {/* STEP 2 — PICK ITEM + QTY */}
+        {/* STEP 2 — PRODUCT */}
+        {step === "product" && fromLoc && (
+          <div className="flex flex-col gap-4">
+            <LocCard label="FROM" loc={fromLoc} />
+            <ScanCard
+              label="Product" color="#60a5fa" inputRef={prodRef}
+              value={prodScan} onChange={setProdScan} onScan={handleProductScan}
+              placeholder="Scan product barcode / SKU" loading={prodLoading}
+              btn="Find item at this bin"
+            />
+            {prodError && <ErrorBox msg={prodError} />}
+          </div>
+        )}
+
+        {/* STEP 3 — PICK + QTY */}
         {step === "pick" && fromLoc && (
           <div className="flex flex-col gap-4">
             <LocCard label="FROM" loc={fromLoc} />
-
-            {stockLoading && (
-              <div className="flex flex-col items-center gap-3 py-10 text-slate-400">
-                <Loader2 className="w-7 h-7 animate-spin" />
-                <p className="text-sm">Loading items at this location…</p>
+            {stock.length > 1 && (
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-semibold text-slate-400 px-1">{stock.length} lots — pick one</span>
+                {stock.map((s, i) => {
+                  const on = sel === s;
+                  return (
+                    <button key={i} onClick={() => { setSel(s); setQty(1); }}
+                      className="text-left rounded-xl p-3.5"
+                      style={{ ...GLASS, borderColor: on ? "rgba(59,130,246,0.8)" : "rgba(255,255,255,0.08)", background: on ? "rgba(37,99,235,0.18)" : (GLASS.background as string) }}>
+                      <div className="flex items-center gap-2">
+                        <Package className="w-4 h-4 text-blue-300 flex-shrink-0" />
+                        <span className="font-mono text-sm font-semibold text-white flex-1 truncate">{s.productSku}</span>
+                        <span className="text-sm font-bold text-white">{s.qty}</span>
+                      </div>
+                      <div className="flex gap-2 mt-1.5 flex-wrap">
+                        {s.lotNo && <Tag>LOT {s.lotNo}</Tag>}
+                        {s.expireDate && <Tag>EXP {s.expireDate}</Tag>}
+                        <Tag>{s.itemCondition || "GOOD"}</Tag>
+                        {s.customerCode && <Tag>{s.customerCode}</Tag>}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
 
-            {!stockLoading && stock && stock.length === 0 && (
-              <div className="rounded-2xl p-6 text-center" style={GLASS}>
-                <Boxes className="w-9 h-9 text-slate-500 mx-auto mb-2" />
-                <p className="text-sm text-slate-300 font-semibold">No stock at this location</p>
-                {stockMethod && <p className="mt-2 text-[10px] text-slate-500 font-mono break-all leading-relaxed">{stockMethod}</p>}
-                <button onClick={reset} className="mt-3 text-xs text-blue-300 underline">Scan another location</button>
-              </div>
-            )}
-
-            {!stockLoading && stock && stock.length > 0 && (
-              <>
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs font-semibold text-slate-400">{stock.length} item(s)</span>
-                  {stockMethod && <span className="text-[10px] text-slate-600">via {stockMethod}</span>}
-                </div>
-                <div className="flex flex-col gap-2">
-                  {stock.map((s, i) => {
-                    const on = sel === s;
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => pickStock(s)}
-                        className="text-left rounded-xl p-3.5 transition-colors"
-                        style={{ ...GLASS, borderColor: on ? "rgba(59,130,246,0.8)" : "rgba(255,255,255,0.08)", background: on ? "rgba(37,99,235,0.18)" : (GLASS.background as string) }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Package className="w-4 h-4 text-blue-300 flex-shrink-0" />
-                          <span className="font-mono text-sm font-semibold text-white flex-1 truncate">{s.productSku}</span>
-                          <span className="text-sm font-bold text-white">{s.qty}</span>
-                        </div>
-                        {s.productName && <p className="text-xs text-slate-400 mt-1 truncate">{s.productName}</p>}
-                        <div className="flex gap-2 mt-1.5 flex-wrap">
-                          {s.lotNo && <Tag>LOT {s.lotNo}</Tag>}
-                          {s.expireDate && <Tag>EXP {s.expireDate}</Tag>}
-                          <Tag>{s.itemCondition || "GOOD"}</Tag>
-                          {s.customerCode && <Tag>{s.customerCode}</Tag>}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-
-            {/* qty + next */}
             {sel && (
-              <div className="rounded-2xl p-4 sticky bottom-0" style={{ ...GLASS, background: "rgba(8,13,26,0.85)", backdropFilter: "blur(8px)" }}>
-                <div className="flex items-center justify-between mb-3">
+              <div className="rounded-2xl p-4" style={GLASS}>
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-blue-300" />
+                  <span className="font-mono text-sm font-semibold text-white flex-1 truncate">{sel.productSku}</span>
+                  <span className="text-xs text-slate-400">on hand {sel.qty}</span>
+                </div>
+                {sel.productName && <p className="text-xs text-slate-400 mt-1 truncate">{sel.productName}</p>}
+                <div className="flex gap-2 mt-2 flex-wrap">
+                  {sel.lotNo && <Tag>LOT {sel.lotNo}</Tag>}
+                  {sel.expireDate && <Tag>EXP {sel.expireDate}</Tag>}
+                  <Tag>{sel.itemCondition || "GOOD"}</Tag>
+                  {sel.customerCode && <Tag>{sel.customerCode}</Tag>}
+                </div>
+
+                <div className="flex items-center justify-between mt-4 mb-2">
                   <span className="text-xs font-semibold text-slate-400">Move quantity</span>
                   <span className="text-[11px] text-slate-500">max {sel.qty}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <StepBtn onClick={() => setQty((q) => Math.max(1, q - 1))}>−</StepBtn>
-                  <input
-                    type="number"
-                    value={qty}
+                  <input type="number" value={qty}
                     onChange={(e) => setQty(Math.min(sel.qty, Math.max(1, Number(e.target.value) || 1)))}
-                    className="flex-1 text-center rounded-xl py-2.5 text-white text-lg font-bold outline-none"
-                    style={INPUT}
-                  />
+                    className="flex-1 text-center rounded-xl py-2.5 text-white text-lg font-bold outline-none" style={INPUT} />
                   <StepBtn onClick={() => setQty((q) => Math.min(sel.qty, q + 1))}>+</StepBtn>
                 </div>
-                <button
-                  onClick={() => setStep("to")}
-                  className="mt-3 w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2"
-                  style={{ background: "#2563eb" }}
-                >
+                <button onClick={() => setStep("to")}
+                  className="mt-3 w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2" style={{ background: "#2563eb" }}>
                   Next: scan TO location <ArrowRight className="w-5 h-5" />
                 </button>
               </div>
@@ -445,7 +382,7 @@ export default function InventoryMovePage() {
           </div>
         )}
 
-        {/* STEP 3 — TO SCAN */}
+        {/* STEP 4 — TO */}
         {step === "to" && fromLoc && sel && (
           <div className="flex flex-col gap-4">
             <div className="rounded-2xl p-4" style={GLASS}>
@@ -454,11 +391,6 @@ export default function InventoryMovePage() {
                 <span className="font-mono font-semibold text-white">{sel.productSku}</span>
                 <span className="ml-auto text-white font-bold">× {qty}</span>
               </div>
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {sel.lotNo && <Tag>LOT {sel.lotNo}</Tag>}
-                {sel.expireDate && <Tag>EXP {sel.expireDate}</Tag>}
-                <Tag>{sel.itemCondition || "GOOD"}</Tag>
-              </div>
               <div className="flex items-center gap-2 mt-3 text-xs text-slate-400">
                 <MapPin className="w-3.5 h-3.5" />
                 <span className="font-mono">{fromLoc.locationCode}</span>
@@ -466,32 +398,12 @@ export default function InventoryMovePage() {
                 <span className="text-slate-500">scan destination…</span>
               </div>
             </div>
-
-            <div className="rounded-2xl p-5" style={GLASS}>
-              <div className="flex items-center gap-2 mb-3 text-emerald-300">
-                <ScanLine className="w-5 h-5" />
-                <span className="text-sm font-semibold">TO Location</span>
-              </div>
-              <input
-                ref={toRef}
-                value={toScan}
-                onChange={(e) => setToScan(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleToScan()}
-                placeholder="Scan or type destination barcode"
-                className="w-full rounded-xl px-4 py-3 text-white text-base outline-none placeholder:text-slate-500"
-                style={{ ...INPUT, borderColor: "rgba(16,185,129,0.5)" }}
-                autoComplete="off"
-              />
-              <button
-                onClick={handleToScan}
-                disabled={toLoading || moving || !toScan.trim()}
-                className="mt-3 w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-40"
-                style={{ background: "#059669" }}
-              >
-                {(toLoading || moving) ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
-                {moving ? "Moving…" : "Confirm move"}
-              </button>
-            </div>
+            <ScanCard
+              label="TO Location" color="#34d399" inputRef={toRef}
+              value={toScan} onChange={setToScan} onScan={handleToScan}
+              placeholder="Scan or type destination barcode"
+              loading={toLoading || moving} btn={moving ? "Moving…" : "Confirm move"} confirm
+            />
             {toError && <ErrorBox msg={toError} />}
           </div>
         )}
@@ -509,11 +421,7 @@ export default function InventoryMovePage() {
               <Row k="From" v={result.from} mono />
               <Row k="To" v={result.to} mono />
             </div>
-            <button
-              onClick={reset}
-              className="w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2"
-              style={{ background: "#2563eb" }}
-            >
+            <button onClick={reset} className="w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2" style={{ background: "#2563eb" }}>
               <RotateCcw className="w-5 h-5" /> Move another
             </button>
           </div>
@@ -523,7 +431,33 @@ export default function InventoryMovePage() {
   );
 }
 
-/* ── small UI bits ── */
+/* ── reusable bits ── */
+function ScanCard({ label, color, inputRef, value, onChange, onScan, placeholder, loading, btn, confirm }: {
+  label: string; color: string; inputRef: React.RefObject<HTMLInputElement | null>;
+  value: string; onChange: (v: string) => void; onScan: () => void;
+  placeholder: string; loading: boolean; btn: string; confirm?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl p-5" style={GLASS}>
+      <div className="flex items-center gap-2 mb-3" style={{ color }}>
+        <ScanLine className="w-5 h-5" />
+        <span className="text-sm font-semibold">{label}</span>
+      </div>
+      <input
+        ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && onScan()} placeholder={placeholder} autoComplete="off"
+        className="w-full rounded-xl px-4 py-3 text-white text-base outline-none placeholder:text-slate-500"
+        style={{ ...INPUT, borderColor: confirm ? "rgba(16,185,129,0.5)" : "rgba(59,130,246,0.5)" }}
+      />
+      <button onClick={onScan} disabled={loading || !value.trim()}
+        className="mt-3 w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-40"
+        style={{ background: confirm ? "#059669" : "#2563eb" }}>
+        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : confirm ? <CheckCircle2 className="w-5 h-5" /> : <ArrowRight className="w-5 h-5" />}
+        {btn}
+      </button>
+    </div>
+  );
+}
 function Tag({ children }: { children: React.ReactNode }) {
   return <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-slate-300" style={{ background: "rgba(255,255,255,0.08)" }}>{children}</span>;
 }
@@ -548,6 +482,7 @@ function LocCard({ label, loc }: { label: string; loc: LocInfo }) {
         <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{label}</p>
         <p className="font-mono text-sm text-white truncate">{loc.locationCode}</p>
       </div>
+      <Boxes className="w-4 h-4 text-slate-600" />
     </div>
   );
 }
