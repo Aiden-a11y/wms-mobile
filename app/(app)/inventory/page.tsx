@@ -93,7 +93,7 @@ async function wmsList(path: string, body: Record<string, unknown>): Promise<Rec
 }
 
 /* Load ALL stock for the warehouse (per-customer paginated bulk — proven dashboard method). */
-async function loadAllStock(): Promise<Record<string, unknown>[]> {
+async function loadAllStock(): Promise<{ rows: Record<string, unknown>[]; custCount: number; ep: string }> {
   const custs = await fetchCustomers();
   const targets: (string | undefined)[] = custs.length ? custs : [undefined];
   for (const ep of ["inventory/detail", "inventory/list"]) {
@@ -112,9 +112,9 @@ async function loadAllStock(): Promise<Record<string, unknown>[]> {
         page++;
       }
     }
-    if (worked && acc.length) return acc;
+    if (worked && acc.length) return { rows: acc, custCount: custs.length, ep };
   }
-  return [];
+  return { rows: [], custCount: custs.length, ep: "none" };
 }
 
 async function fetchCustomers(): Promise<string[]> {
@@ -210,14 +210,20 @@ export default function InventoryMovePage() {
     let method = "";
 
     // (B) light path first: single location-only call
-    const light = (await detail({ warehouseCode: WH, locationCode: loc.locationCode })).filter(match);
-    if (light.length) { rows = light; method = "location-only"; }
+    const lightRaw = await detail({ warehouseCode: WH, locationCode: loc.locationCode });
+    const light = lightRaw.filter(match);
+    if (light.length) { rows = light; method = `location-only · ${light.length}`; }
 
     // (A) fallback: bulk load all stock + client-side location filter (dashboard method)
     if (rows.length === 0) {
       const all = await loadAllStock();
-      rows = all.filter(match);
-      method = `bulk ${all.length} rows · ${rows.length} here`;
+      rows = all.rows.filter(match);
+      method = `key ${fromKey} · cust ${all.custCount} · ${all.ep} ${all.rows.length} rows · ${rows.length} here`;
+      // if bulk loaded rows but none matched, show sample row location keys to diagnose format
+      if (all.rows.length > 0 && rows.length === 0) {
+        const samples = all.rows.slice(0, 3).map((r) => locKey(r) || normLoc(buildLocCode(r))).join(", ");
+        method += ` · ex: ${samples}`;
+      }
     }
 
     // de-dup by sku|lot|exp|condition
@@ -369,6 +375,7 @@ export default function InventoryMovePage() {
               <div className="rounded-2xl p-6 text-center" style={GLASS}>
                 <Boxes className="w-9 h-9 text-slate-500 mx-auto mb-2" />
                 <p className="text-sm text-slate-300 font-semibold">No stock at this location</p>
+                {stockMethod && <p className="mt-2 text-[10px] text-slate-500 font-mono break-all leading-relaxed">{stockMethod}</p>}
                 <button onClick={reset} className="mt-3 text-xs text-blue-300 underline">Scan another location</button>
               </div>
             )}
