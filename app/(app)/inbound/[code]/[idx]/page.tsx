@@ -34,6 +34,7 @@ export default function InboundInspectPage() {
   const idx = Number(params.idx ?? 0);
 
   const [item, setItem] = useState<Row | null>(null);
+  const [orderCustomerCode, setOrderCustomerCode] = useState("");
   const [loading, setLoading] = useState(true);
 
   const [tagQty, setTagQty] = useState("");
@@ -68,6 +69,17 @@ export default function InboundInspectPage() {
           Array.isArray(json?.data)        ? json.data : [];
         const found = list[idx] ?? null;
         setItem(found);
+
+        // If item doesn't carry customerCode, fetch order header for it
+        if (found && !found.customerCode) {
+          try {
+            const orderRes = await fetch(`/api/wms/receiving/${code}`, { headers: authHeaders() });
+            const orderJson = await orderRes.json().catch(() => null);
+            const ord = orderJson?.data ?? orderJson;
+            const cc = String(ord?.customerCode ?? ord?.customer?.customerCode ?? "");
+            if (cc) setOrderCustomerCode(cc);
+          } catch { /* ignore */ }
+        }
         if (found) {
           const raw = String(found.expireDate ?? "");
           setLotNo(String(found.lotNo ?? ""));
@@ -103,7 +115,7 @@ export default function InboundInspectPage() {
   const sku = String(item?.productSku ?? item?.sku ?? "-");
   const productName = String(item?.productName ?? "-");
   const warehouseCode = String(item?.warehouseCode ?? "");
-  const customerCode = String(item?.customerCode ?? "");
+  const customerCode = String(item?.customerCode ?? orderCustomerCode ?? "");
 
   async function generateTag() {
     if (!item || !tagQty || Number(tagQty) <= 0 || generating) return;

@@ -211,22 +211,31 @@ function StowFlowInner() {
         if (!found.customerCode || !found.warehouseCd) {
           try {
             const headers = authHeaders();
-            const orderRes = await fetch(`/api/wms/receiving/items/${found.orderCode}`, { headers });
-            const orderJson = await orderRes.json().catch(() => null);
+            // Step 1: try items endpoint for warehouseCd + customerCode
+            const itemsRes = await fetch(`/api/wms/receiving/items/${found.orderCode}`, { headers });
+            const itemsJson = await itemsRes.json().catch(() => null);
             const items: Record<string, unknown>[] =
-              Array.isArray(orderJson?.data?.items) ? orderJson.data.items :
-              Array.isArray(orderJson?.data?.list)  ? orderJson.data.list  :
-              Array.isArray(orderJson?.data)        ? orderJson.data       : [];
-            const item = items.find(
+              Array.isArray(itemsJson?.data?.items) ? itemsJson.data.items :
+              Array.isArray(itemsJson?.data?.list)  ? itemsJson.data.list  :
+              Array.isArray(itemsJson?.data)        ? itemsJson.data       : [];
+            const matchItem = items.find(
               (r) => Number(r.receiveItemId ?? r.itemId) === found!.receiveItemId
             ) ?? items[0];
-            if (item) {
+            if (matchItem) {
               found = {
                 ...found,
-                customerCode: found.customerCode || String(item.customerCode ?? ""),
-                warehouseCode: found.warehouseCode || String(item.warehouseCode ?? "STOO1"),
-                warehouseCd:   found.warehouseCd   || String(item.warehouseCd  ?? item.warehouseId ?? ""),
+                customerCode: found.customerCode || String(matchItem.customerCode ?? ""),
+                warehouseCode: found.warehouseCode || String(matchItem.warehouseCode ?? "STOO1"),
+                warehouseCd:   found.warehouseCd   || String(matchItem.warehouseCd  ?? matchItem.warehouseId ?? ""),
               };
+            }
+            // Step 2: if customerCode still missing, fetch order header
+            if (!found.customerCode) {
+              const orderRes = await fetch(`/api/wms/receiving/${found.orderCode}`, { headers });
+              const orderJson = await orderRes.json().catch(() => null);
+              const ord = orderJson?.data ?? orderJson;
+              const cc = String(ord?.customerCode ?? ord?.customer?.customerCode ?? "");
+              if (cc) found = { ...found, customerCode: cc };
             }
           } catch { /* ignore */ }
         }
