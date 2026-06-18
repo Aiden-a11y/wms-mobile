@@ -135,28 +135,32 @@ function makeLocKey(zone: string, aisle: string, bay: string, level: string, pos
 }
 
 // ── Build cluster pick list ───────────────────────────────────────────────────
-// Fetches picking lines for each bin's order sequentially (to avoid 401),
-// tags tasks with binNo + orderCode, groups by location.
+// Iterates candidates sequentially, skips orders with no picking lines,
+// collects up to maxBins valid orders, returns both the filtered bins and groups.
 
 export async function buildClusterPickList(
-  bins: ClusterBin[],
+  candidates: Array<{ orderCode: string; customerCode: string }>,
+  maxBins: number,
   type: string,
   warehouseCode: string,
   onProgress?: (done: number, total: number) => void,
-): Promise<LocationGroup[]> {
+): Promise<{ bins: ClusterBin[]; groups: LocationGroup[] }> {
   const allTasks: ClusterPickTask[] = [];
+  const bins: ClusterBin[] = [];
+  let checked = 0;
 
-  for (let i = 0; i < bins.length; i++) {
-    const bin = bins[i];
-    onProgress?.(i, bins.length);
+  for (const cand of candidates) {
+    if (bins.length >= maxBins) break;
+    onProgress?.(checked, candidates.length);
+    checked++;
 
     let rawItems: unknown[] = [];
 
-    // Try picking lines first (assigned locations)
+    // Try picking lines first (assigned locations only)
     const pickingEndpoints = [
-      `/api/wms/shipping/${type}/picking/${bin.orderCode}`,
-      `/api/wms/shipping/picking/${bin.orderCode}`,
-      `/api/wms/outbound/${type}/picking/${bin.orderCode}`,
+      `/api/wms/shipping/${type}/picking/${cand.orderCode}`,
+      `/api/wms/shipping/picking/${cand.orderCode}`,
+      `/api/wms/outbound/${type}/picking/${cand.orderCode}`,
     ];
     for (const ep of pickingEndpoints) {
       try {
@@ -167,26 +171,19 @@ export async function buildClusterPickList(
       } catch { /* try next */ }
     }
 
-    // Fallback to items endpoint
-    if (rawItems.length === 0) {
-      for (const ep of [`/api/wms/shipping/${type}/items/${bin.orderCode}`, `/api/wms/shipping/items/${bin.orderCode}`]) {
-        try {
-          const r = await fetch(ep, { headers: authHeaders() });
-          const j = await r.json().catch(() => null);
-          const list = j?.data?.items ?? j?.data?.list ?? j?.data ?? j?.items ?? j?.list ?? (Array.isArray(j) ? j : null);
-          if (r.ok && Array.isArray(list) && list.length > 0) { rawItems = list; break; }
-        } catch { /* try next */ }
-      }
-    }
-
+    // Skip orders with no picking location assigned
     if (rawItems.length === 0) continue;
 
-    const tasks = await buildPickList(rawItems as Record<string, unknown>[], warehouseCode, bin.customerCode);
+    const binNo = bins.length + 1;
+    const bin: ClusterBin = { binNo, orderCode: cand.orderCode, customerCode: cand.customerCode };
+    bins.push(bin);
+
+    const tasks = await buildPickList(rawItems as Record<string, unknown>[], warehouseCode, cand.customerCode);
     for (const task of tasks) {
-      allTasks.push({ ...task, binNo: bin.binNo, orderCode: bin.orderCode });
+      allTasks.push({ ...task, binNo, orderCode: cand.orderCode });
     }
 
-    onProgress?.(i + 1, bins.length);
+    onProgress?.(checked, candidates.length);
   }
 
   // Group by location
@@ -218,7 +215,7 @@ export async function buildClusterPickList(
     return parseLoc(a.levelName) - parseLoc(b.levelName);
   });
 
-  return groups;
+  return { bins, groups };
 }
 
 // Re-export confirmPick so cluster pages don't need to import from picking.ts directly
