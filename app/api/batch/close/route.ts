@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import redis from "@/lib/redis";
 import type { Batch } from "@/lib/batch";
 
-const DONE_TTL = 30 * 24 * 60 * 60; // 30 days
+const DONE_TTL = 60 * 24 * 60 * 60; // 60 days
 
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
