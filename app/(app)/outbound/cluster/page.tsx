@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag, Layers } from "lucide-react";
+import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag, Layers, CheckCheck } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import {
   buildClusterPickList, saveCluster, saveLocationGroups,
@@ -35,6 +35,7 @@ export default function ClusterPage() {
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [activeClusters, setActiveClusters] = useState<Cluster[]>([]);
   const [redisBatches, setRedisBatches] = useState<Batch[]>([]);
+  const [closing, setClosing] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetch("/api/wms/combo/warehouse", { headers: authHeaders() })
@@ -83,6 +84,17 @@ export default function ClusterPage() {
 
   function startBatch(batch: Batch) {
     router.push(`/outbound/batch/${encodeURIComponent(batch.id)}`);
+  }
+
+  async function closeBatch(batch: Batch) {
+    if (!confirm(`Close batch (${batch.orderCount} orders)?\nThis will mark it as completed in the dashboard.`)) return;
+    setClosing((prev) => new Set(prev).add(batch.id));
+    try {
+      await fetch(`/api/batch/close?id=${encodeURIComponent(batch.id)}`, { method: "POST" });
+      setRedisBatches((prev) => prev.filter((b) => b.id !== batch.id));
+    } finally {
+      setClosing((prev) => { const next = new Set(prev); next.delete(batch.id); return next; });
+    }
   }
 
   async function load() {
@@ -175,13 +187,26 @@ export default function ClusterPage() {
                     </p>
                     <p className="text-xs text-slate-600 mt-0.5">{new Date(batch.createdAt).toLocaleString()}</p>
                   </div>
-                  <button
-                    onClick={() => startBatch(batch)}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all active:scale-95"
-                    style={{ background: "rgba(139,92,246,0.8)" }}
-                  >
-                    Pick →
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => closeBatch(batch)}
+                      disabled={closing.has(batch.id)}
+                      className="flex items-center gap-1 px-2.5 py-2 rounded-xl text-xs font-semibold text-emerald-300 transition-all active:scale-95 disabled:opacity-50"
+                      style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)" }}
+                    >
+                      {closing.has(batch.id)
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <CheckCheck className="w-3.5 h-3.5" />}
+                      Close
+                    </button>
+                    <button
+                      onClick={() => startBatch(batch)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all active:scale-95"
+                      style={{ background: "rgba(139,92,246,0.8)" }}
+                    >
+                      Pick →
+                    </button>
+                  </div>
                 </div>
               );
             })}

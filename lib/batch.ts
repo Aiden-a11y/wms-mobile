@@ -8,4 +8,6 @@ export interface Batch {
   warehouseCode: string;
   createdAt: string;
   createdBy: string;
+  status?: "active" | "completed";
+  completedAt?: string;
 }
