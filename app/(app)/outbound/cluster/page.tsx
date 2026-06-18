@@ -9,6 +9,8 @@ import {
   type Cluster,
 } from "@/lib/cluster";
 import type { Batch } from "@/lib/batch";
+import type { B2CCluster } from "@/lib/b2c-cluster";
+import { binColor } from "@/lib/b2c-cluster";
 
 const DARK = { background: "radial-gradient(ellipse at 50% 0%, #1e2d4a 0%, #080d1a 60%)" };
 const HDR_BORDER = { borderBottom: "1px solid rgba(255,255,255,0.08)" };
@@ -35,6 +37,7 @@ export default function ClusterPage() {
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [activeClusters, setActiveClusters] = useState<Cluster[]>([]);
   const [redisBatches, setRedisBatches] = useState<Batch[]>([]);
+  const [b2cClusters, setB2cClusters] = useState<B2CCluster[]>([]);
   const [closing, setClosing] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -51,6 +54,15 @@ export default function ClusterPage() {
   useEffect(() => {
     const ids = listActiveClusterIds();
     setActiveClusters(ids.map((id) => getCluster(id)).filter(Boolean) as Cluster[]);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/cluster")
+      .then((r) => r.json())
+      .then((data: B2CCluster[]) => {
+        if (Array.isArray(data)) setB2cClusters(data.filter((c) => c.status === "active"));
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -208,6 +220,46 @@ export default function ClusterPage() {
                     </button>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Dashboard B2C Clusters */}
+        {b2cClusters.length > 0 && (
+          <div className="rounded-2xl overflow-hidden" style={GLASS}>
+            <div className="px-4 py-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(16,185,129,0.12)" }}>
+              <div className="flex items-center gap-2">
+                <PackageCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <p className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">B2C Cluster Pick — Dashboard</p>
+              </div>
+            </div>
+            {b2cClusters.map((c) => {
+              const colors = c.bins.slice(0, 5).map((b) => binColor(b.binNo));
+              return (
+                <button key={c.id} onClick={() => router.push(`/outbound/b2ccluster/${encodeURIComponent(c.id)}`)}
+                  className="w-full px-4 py-3 flex items-center gap-3 active:bg-white/5 text-left"
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div className="flex gap-0.5 flex-shrink-0">
+                    {colors.map((col, i) => (
+                      <div key={i} className="w-4 h-4 rounded flex items-center justify-center text-[9px] font-black"
+                        style={{ backgroundColor: col.bg, color: col.text }}>
+                        {c.bins[i]?.binNo}
+                      </div>
+                    ))}
+                    {c.bins.length > 5 && (
+                      <div className="w-4 h-4 rounded flex items-center justify-center text-[8px] font-bold text-slate-400"
+                        style={{ background: "rgba(255,255,255,0.1)" }}>
+                        +{c.bins.length - 5}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white">{c.bins.length} bins · {c.locationGroups.length} locations</p>
+                    <p className="text-xs text-slate-500">{new Date(c.createdAt).toLocaleString()}</p>
+                  </div>
+                  <span className="text-slate-500 text-lg flex-shrink-0">›</span>
+                </button>
               );
             })}
           </div>
