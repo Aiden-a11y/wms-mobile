@@ -36,6 +36,7 @@ export interface B2CClusterBin {
   orderNo?: string;
   items: B2CClusterItem[];
   needsReplenishment?: boolean;
+  replenishmentItems?: { sku: string; name: string; qty: number; locationCode?: string }[];
 }
 
 export interface B2CCluster {
