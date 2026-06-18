@@ -6,9 +6,14 @@ export async function GET() {
   const keys = await redis.keys("wms:batch:*");
   if (keys.length === 0) return NextResponse.json([]);
   const values = await Promise.all(keys.map((k) => redis.get(k)));
-  const batches = (values.filter(Boolean) as Batch[]).sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const batches = (values
+    .map((v) => {
+      if (!v) return null;
+      if (typeof v === "string") { try { return JSON.parse(v) as Batch; } catch { return null; } }
+      return v as Batch;
+    })
+    .filter(Boolean) as Batch[])
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   return NextResponse.json(batches);
 }
 
