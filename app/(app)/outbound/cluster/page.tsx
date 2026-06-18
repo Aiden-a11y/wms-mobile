@@ -57,7 +57,7 @@ export default function ClusterPage() {
       .then((r) => r.json())
       .then(async (data: Batch[]) => {
         if (!Array.isArray(data) || data.length === 0) return;
-        // Filter: show only batches that have WMS locations assigned
+        // Filter: show only batches that have WMS picking locations assigned
         const results = await Promise.all(
           data.map(async (batch) => {
             const firstOrder = batch.orders[0];
@@ -70,16 +70,7 @@ export default function ClusterPage() {
               const json = await res.json().catch(() => ({})) as Record<string, unknown>;
               const d = (json?.data ?? {}) as Record<string, unknown>;
               const assignments = Array.isArray(d.assignments) ? d.assignments : [];
-              if (assignments.length === 0) return null;
-              // Only hide if items endpoint explicitly reports ALL items fully assigned
-              // (unassignedQty field must exist and be 0 for every item)
-              const items = Array.isArray(d.items) ? d.items as Record<string, unknown>[] : [];
-              const hasUnassignedQtyField = items.length > 0 && items.every((it) => "unassignedQty" in it);
-              if (hasUnassignedQtyField) {
-                const allPicked = items.every((it) => Number(it.unassignedQty) === 0);
-                if (allPicked) return null;
-              }
-              return batch;
+              return assignments.length > 0 ? batch : null;
             } catch {
               return null;
             }
