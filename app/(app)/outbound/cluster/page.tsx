@@ -35,7 +35,6 @@ export default function ClusterPage() {
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [activeClusters, setActiveClusters] = useState<Cluster[]>([]);
   const [redisBatches, setRedisBatches] = useState<Batch[]>([]);
-  const [startingBatch, setStartingBatch] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/wms/combo/warehouse", { headers: authHeaders() })
@@ -60,32 +59,8 @@ export default function ClusterPage() {
       .catch(() => {});
   }, []);
 
-  async function startBatch(batch: Batch) {
-    setStartingBatch(batch.id);
-    const id = Date.now().toString();
-    try {
-      const { bins, groups } = await buildClusterPickList(
-        batch.orders,
-        MAX_CLUSTER,
-        batch.type,
-        batch.warehouseCode || warehouseCode,
-        (done, total) => setBuildProgress({ done, total }),
-      );
-      if (bins.length === 0) {
-        setError("No picking locations assigned for these orders yet.");
-        setStartingBatch(null);
-        return;
-      }
-      const cluster: Cluster = { id, bins, type: batch.type, warehouseCode: batch.warehouseCode || warehouseCode, createdAt: new Date().toISOString() };
-      saveCluster(cluster);
-      saveLocationGroups(id, groups);
-      // remove from Redis now that it's started
-      await fetch(`/api/batch?id=${encodeURIComponent(batch.id)}`, { method: "DELETE" }).catch(() => {});
-      router.push(`/outbound/cluster/${id}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start batch");
-      setStartingBatch(null);
-    }
+  function startBatch(batch: Batch) {
+    router.push(`/outbound/batch/${encodeURIComponent(batch.id)}`);
   }
 
   async function load() {
@@ -164,7 +139,6 @@ export default function ClusterPage() {
               </div>
             </div>
             {redisBatches.map((batch) => {
-              const isStarting = startingBatch === batch.id;
               const topSkus = batch.skuList.slice(0, 3);
               return (
                 <div key={batch.id} className="px-4 py-3 flex items-center gap-3"
@@ -181,11 +155,10 @@ export default function ClusterPage() {
                   </div>
                   <button
                     onClick={() => startBatch(batch)}
-                    disabled={!!startingBatch}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all active:scale-95"
                     style={{ background: "rgba(139,92,246,0.8)" }}
                   >
-                    {isStarting ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</> : "Start"}
+                    Pick →
                   </button>
                 </div>
               );
