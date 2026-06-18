@@ -1,13 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag } from "lucide-react";
+import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag, Layers } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import {
   buildClusterPickList, saveCluster, saveLocationGroups,
-  listActiveClusterIds, getCluster, clearCluster,
-  type ClusterBin, type Cluster,
+  listActiveClusterIds, getCluster,
+  type Cluster,
 } from "@/lib/cluster";
+import type { Batch } from "@/lib/batch";
 
 const DARK = { background: "radial-gradient(ellipse at 50% 0%, #1e2d4a 0%, #080d1a 60%)" };
 const HDR_BORDER = { borderBottom: "1px solid rgba(255,255,255,0.08)" };
@@ -33,6 +34,8 @@ export default function ClusterPage() {
   const [buildProgress, setBuildProgress] = useState<{ done: number; total: number } | null>(null);
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [activeClusters, setActiveClusters] = useState<Cluster[]>([]);
+  const [redisBatches, setRedisBatches] = useState<Batch[]>([]);
+  const [startingBatch, setStartingBatch] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/wms/combo/warehouse", { headers: authHeaders() })
@@ -49,6 +52,41 @@ export default function ClusterPage() {
     const ids = listActiveClusterIds();
     setActiveClusters(ids.map((id) => getCluster(id)).filter(Boolean) as Cluster[]);
   }, []);
+
+  useEffect(() => {
+    fetch("/api/batch")
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setRedisBatches(data); })
+      .catch(() => {});
+  }, []);
+
+  async function startBatch(batch: Batch) {
+    setStartingBatch(batch.id);
+    const id = Date.now().toString();
+    try {
+      const { bins, groups } = await buildClusterPickList(
+        batch.orders,
+        MAX_CLUSTER,
+        batch.type,
+        batch.warehouseCode || warehouseCode,
+        (done, total) => setBuildProgress({ done, total }),
+      );
+      if (bins.length === 0) {
+        setError("No picking locations assigned for these orders yet.");
+        setStartingBatch(null);
+        return;
+      }
+      const cluster: Cluster = { id, bins, type: batch.type, warehouseCode: batch.warehouseCode || warehouseCode, createdAt: new Date().toISOString() };
+      saveCluster(cluster);
+      saveLocationGroups(id, groups);
+      // remove from Redis now that it's started
+      await fetch(`/api/batch?id=${encodeURIComponent(batch.id)}`, { method: "DELETE" }).catch(() => {});
+      router.push(`/outbound/cluster/${id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start batch");
+      setStartingBatch(null);
+    }
+  }
 
   async function load() {
     setLoading(true); setError("");
@@ -67,36 +105,38 @@ export default function ClusterPage() {
 
   useEffect(() => { load(); }, [warehouseCode]); // eslint-disable-line
 
-  // Auto-select first MAX_CLUSTER orders and start
+  // Start cluster: iterate all orders, skip ones with no picking locations, fill up to MAX_CLUSTER
   async function startCluster() {
-    const picked = orders.slice(0, MAX_CLUSTER);
-    if (picked.length === 0) return;
-    setBuilding(true); setBuildProgress({ done: 0, total: picked.length });
+    if (orders.length === 0) return;
+    setBuilding(true); setBuildProgress({ done: 0, total: Math.min(orders.length, MAX_CLUSTER * 2) });
 
-    const bins: ClusterBin[] = picked.map((o, i) => ({
-      binNo: i + 1,
+    const candidates = orders.map((o) => ({
       orderCode: orderCode(o),
       customerCode: customerCode(o),
     }));
 
     const id = Date.now().toString();
-    const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString() };
-    saveCluster(cluster);
 
     try {
-      const groups = await buildClusterPickList(bins, "b2c", warehouseCode, (done, total) => {
+      const { bins, groups } = await buildClusterPickList(candidates, MAX_CLUSTER, "b2c", warehouseCode, (done, total) => {
         setBuildProgress({ done, total });
       });
+
+      if (bins.length === 0) {
+        setError("No orders have picking locations assigned. Allocate locations in WMS first.");
+        setBuilding(false);
+        return;
+      }
+
+      const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString() };
+      saveCluster(cluster);
       saveLocationGroups(id, groups);
       router.push(`/outbound/cluster/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to build cluster");
-      clearCluster(id);
       setBuilding(false);
     }
   }
-
-  const clusterCount = Math.min(orders.length, MAX_CLUSTER);
 
   return (
     <div className="min-h-screen flex flex-col" style={DARK}>
@@ -114,6 +154,45 @@ export default function ClusterPage() {
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-32 space-y-4 overflow-y-auto">
+        {/* Dashboard batches (from Redis) */}
+        {redisBatches.length > 0 && (
+          <div className="rounded-2xl overflow-hidden" style={GLASS}>
+            <div className="px-4 py-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(139,92,246,0.15)" }}>
+              <div className="flex items-center gap-2">
+                <Layers className="w-3.5 h-3.5 text-violet-400" />
+                <p className="text-xs font-semibold text-violet-400 uppercase tracking-wider">Batch Pick — Dashboard</p>
+              </div>
+            </div>
+            {redisBatches.map((batch) => {
+              const isStarting = startingBatch === batch.id;
+              const topSkus = batch.skuList.slice(0, 3);
+              return (
+                <div key={batch.id} className="px-4 py-3 flex items-center gap-3"
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm font-semibold text-white">{batch.orderCount} orders</p>
+                      <span className="text-xs text-violet-400 bg-violet-400/10 px-1.5 py-0.5 rounded">{batch.skuList.length} SKUs</span>
+                    </div>
+                    <p className="text-xs text-slate-500 truncate">
+                      {topSkus.map(({ sku, qty }) => `${sku}×${qty}`).join(" · ")}{batch.skuList.length > 3 ? ` +${batch.skuList.length - 3} more` : ""}
+                    </p>
+                    <p className="text-xs text-slate-600 mt-0.5">{new Date(batch.createdAt).toLocaleString()}</p>
+                  </div>
+                  <button
+                    onClick={() => startBatch(batch)}
+                    disabled={!!startingBatch}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all disabled:opacity-50"
+                    style={{ background: "rgba(139,92,246,0.8)" }}
+                  >
+                    {isStarting ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</> : "Start"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Active clusters */}
         {activeClusters.length > 0 && (
           <div className="rounded-2xl overflow-hidden" style={GLASS}>
@@ -161,7 +240,7 @@ export default function ClusterPage() {
             <div className="flex items-center gap-2 px-1">
               <Tag className="w-3.5 h-3.5 text-blue-400" />
               <p className="text-xs font-semibold text-blue-400">
-                {clusterCount} orders will be bundled{orders.length > MAX_CLUSTER ? ` (${orders.length} total available)` : ""}
+                Up to {MAX_CLUSTER} orders with picking locations assigned · {orders.length} total
               </p>
             </div>
 
@@ -172,7 +251,7 @@ export default function ClusterPage() {
                 return (
                   <div key={code}
                     className="px-4 py-3 flex items-center gap-3"
-                    style={i < clusterCount - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}>
+                    style={i < MAX_CLUSTER - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}>
                     <div className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 text-xs font-bold"
                       style={{ background: "rgba(59,130,246,0.2)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.3)" }}>
                       {i + 1}
@@ -208,7 +287,7 @@ export default function ClusterPage() {
           ) : (
             <>
               <PackageCheck className="w-5 h-5" />
-              Start Cluster Pick — {clusterCount} orders
+              Start Cluster Pick
             </>
           )}
         </button>
