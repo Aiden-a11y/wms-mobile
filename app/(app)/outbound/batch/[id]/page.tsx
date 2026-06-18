@@ -215,10 +215,7 @@ function BatchPickInner() {
           ))}
         </div>
         <button
-          onClick={async () => {
-            await fetch(`/api/batch?id=${encodeURIComponent(batch.id)}`, { method: "DELETE" }).catch(() => {});
-            router.replace("/outbound/cluster");
-          }}
+          onClick={() => router.replace("/outbound/cluster")}
           className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98]"
           style={{ background: "#7c3aed" }}
         >
