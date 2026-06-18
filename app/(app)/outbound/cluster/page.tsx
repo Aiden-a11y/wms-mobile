@@ -57,7 +57,7 @@ export default function ClusterPage() {
       .then((r) => r.json())
       .then(async (data: Batch[]) => {
         if (!Array.isArray(data) || data.length === 0) return;
-        // Filter to only batches where first order has at least one SKU assigned
+        // Filter: show only batches that are assigned but NOT yet fully picked
         const results = await Promise.all(
           data.map(async (batch) => {
             const firstOrder = batch.orders[0];
@@ -70,7 +70,15 @@ export default function ClusterPage() {
               const json = await res.json().catch(() => ({})) as Record<string, unknown>;
               const d = (json?.data ?? {}) as Record<string, unknown>;
               const assignments = Array.isArray(d.assignments) ? d.assignments : [];
-              return assignments.length > 0 ? batch : null;
+              const items = Array.isArray(d.items) ? d.items as Record<string, unknown>[] : [];
+              // Must have assignments (location set) but still have unassigned qty remaining
+              if (assignments.length === 0) return null;
+              // If items endpoint returns unassignedQty, check if anything still needs picking
+              if (items.length > 0) {
+                const hasUnpicked = items.some((it) => Number(it.unassignedQty ?? 0) > 0);
+                if (!hasUnpicked) return null; // fully picked — hide
+              }
+              return batch;
             } catch {
               return null;
             }
