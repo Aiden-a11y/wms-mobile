@@ -55,7 +55,29 @@ export default function ClusterPage() {
   useEffect(() => {
     fetch("/api/batch")
       .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setRedisBatches(data); })
+      .then(async (data: Batch[]) => {
+        if (!Array.isArray(data) || data.length === 0) return;
+        // Filter to only batches where first order has at least one SKU assigned
+        const results = await Promise.all(
+          data.map(async (batch) => {
+            const firstOrder = batch.orders[0];
+            if (!firstOrder) return null;
+            try {
+              const res = await fetch(
+                `/api/wms/shipping/items/${encodeURIComponent(firstOrder.orderCode)}`,
+                { headers: authHeaders() }
+              );
+              const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+              const d = (json?.data ?? {}) as Record<string, unknown>;
+              const assignments = Array.isArray(d.assignments) ? d.assignments : [];
+              return assignments.length > 0 ? batch : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        setRedisBatches(results.filter(Boolean) as Batch[]);
+      })
       .catch(() => {});
   }, []);
 
