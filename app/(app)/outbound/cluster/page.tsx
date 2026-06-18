@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, CheckSquare, Square } from "lucide-react";
+import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import {
   buildClusterPickList, saveCluster, saveLocationGroups,
@@ -12,6 +12,8 @@ import {
 const DARK = { background: "radial-gradient(ellipse at 50% 0%, #1e2d4a 0%, #080d1a 60%)" };
 const HDR_BORDER = { borderBottom: "1px solid rgba(255,255,255,0.08)" };
 const GLASS = { background: "rgba(255,255,255,0.06)", backdropFilter: "blur(16px)", border: "1px solid rgba(255,255,255,0.08)" };
+
+const MAX_CLUSTER = 25;
 
 interface Order { [k: string]: unknown }
 
@@ -27,7 +29,6 @@ export default function ClusterPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [building, setBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState<{ done: number; total: number } | null>(null);
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
@@ -66,22 +67,17 @@ export default function ClusterPage() {
 
   useEffect(() => { load(); }, [warehouseCode]); // eslint-disable-line
 
-  function toggle(code: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) { next.delete(code); } else if (next.size < 25) { next.add(code); }
-      return next;
-    });
-  }
-
+  // Auto-select first MAX_CLUSTER orders and start
   async function startCluster() {
-    if (selected.size === 0) return;
-    setBuilding(true); setBuildProgress({ done: 0, total: selected.size });
+    const picked = orders.slice(0, MAX_CLUSTER);
+    if (picked.length === 0) return;
+    setBuilding(true); setBuildProgress({ done: 0, total: picked.length });
 
-    const bins: ClusterBin[] = [...selected].sort().map((code, i) => {
-      const order = orders.find((o) => orderCode(o) === code);
-      return { binNo: i + 1, orderCode: code, customerCode: order ? customerCode(order) : "" };
-    });
+    const bins: ClusterBin[] = picked.map((o, i) => ({
+      binNo: i + 1,
+      orderCode: orderCode(o),
+      customerCode: customerCode(o),
+    }));
 
     const id = Date.now().toString();
     const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString() };
@@ -96,18 +92,11 @@ export default function ClusterPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to build cluster");
       clearCluster(id);
+      setBuilding(false);
     }
-    setBuilding(false);
   }
 
-  const allStatus = useMemo(() => {
-    const statusMeta: Record<string, { label: string; color: string }> = {
-      CA: { label: "Packing Request", color: "#93c5fd" },
-      AA: { label: "Pre-Alert",       color: "#fde047" },
-      FA: { label: "Complete",        color: "#86efac" },
-    };
-    return statusMeta;
-  }, []);
+  const clusterCount = Math.min(orders.length, MAX_CLUSTER);
 
   return (
     <div className="min-h-screen flex flex-col" style={DARK}>
@@ -117,7 +106,7 @@ export default function ClusterPage() {
         </button>
         <div className="flex-1">
           <p className="text-base font-bold text-white">Cluster Pick</p>
-          <p className="text-xs text-slate-400">Select up to 25 B2C orders</p>
+          <p className="text-xs text-slate-400">Auto-bundle up to {MAX_CLUSTER} B2C orders</p>
         </div>
         <button onClick={load} disabled={loading} className="p-1 text-slate-400 active:text-white">
           <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
@@ -154,19 +143,11 @@ export default function ClusterPage() {
           </div>
         )}
 
-        {/* Selection count */}
-        {selected.size > 0 && (
-          <div className="flex items-center justify-between px-1">
-            <p className="text-xs font-semibold text-blue-400">{selected.size} / 25 selected</p>
-            <button onClick={() => setSelected(new Set())} className="text-xs text-slate-500 active:text-slate-300">Clear</button>
-          </div>
-        )}
-
-        {/* Order list */}
+        {/* Order preview list */}
         {loading && (
           <div className="space-y-2">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-16 rounded-2xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
+              <div key={i} className="h-14 rounded-2xl animate-pulse" style={{ background: "rgba(255,255,255,0.04)" }} />
             ))}
           </div>
         )}
@@ -175,68 +156,63 @@ export default function ClusterPage() {
           <p className="text-center text-slate-500 text-sm py-12">No B2C orders found</p>
         )}
 
-        {!loading && orders.map((o) => {
-          const code = orderCode(o);
-          const isSelected = selected.has(code);
-          const status = String(o.status ?? o.orderStatus ?? o.statusCode ?? "");
-          const statusInfo = allStatus[status];
-          return (
-            <button key={code} onClick={() => toggle(code)}
-              className="w-full rounded-2xl p-4 flex items-center gap-3 active:scale-[0.99] transition-all text-left"
-              style={{ ...GLASS, ...(isSelected ? { border: "1px solid rgba(59,130,246,0.5)", background: "rgba(59,130,246,0.12)" } : {}) }}>
-              <div className="flex-shrink-0">
-                {isSelected
-                  ? <CheckSquare className="w-5 h-5 text-blue-400" />
-                  : <Square className="w-5 h-5 text-slate-600" />}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-mono text-sm font-bold text-white truncate">{code}</p>
-                  {statusInfo && (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0"
-                      style={{ color: statusInfo.color, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                      {statusInfo.label}
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-400 mt-0.5 truncate">
-                  {String(o.customerName ?? o.custName ?? customerCode(o) ?? "")}
-                </p>
-              </div>
-              {isSelected && (
-                <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
-                  style={{ background: "rgba(59,130,246,0.3)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.5)" }}>
-                  {[...selected].indexOf(code) + 1}
-                </div>
-              )}
-            </button>
-          );
-        })}
+        {!loading && orders.length > 0 && (
+          <>
+            <div className="flex items-center gap-2 px-1">
+              <Tag className="w-3.5 h-3.5 text-blue-400" />
+              <p className="text-xs font-semibold text-blue-400">
+                {clusterCount} orders will be bundled{orders.length > MAX_CLUSTER ? ` (${orders.length} total available)` : ""}
+              </p>
+            </div>
+
+            <div className="rounded-2xl overflow-hidden" style={GLASS}>
+              {orders.slice(0, MAX_CLUSTER).map((o, i) => {
+                const code = orderCode(o);
+                const custName = String(o.customerName ?? o.custName ?? customerCode(o) ?? "");
+                return (
+                  <div key={code}
+                    className="px-4 py-3 flex items-center gap-3"
+                    style={i < clusterCount - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}>
+                    <div className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 text-xs font-bold"
+                      style={{ background: "rgba(59,130,246,0.2)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.3)" }}>
+                      {i + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-mono text-sm font-bold text-white truncate">{code}</p>
+                      {custName && <p className="text-xs text-slate-500 truncate mt-0.5">{custName}</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </main>
 
       {/* Start button */}
-      {selected.size > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 p-4" style={{ background: "linear-gradient(to top, rgba(8,13,26,1) 70%, transparent)" }}>
-          <button
-            onClick={startCluster}
-            disabled={building}
-            className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-60"
-            style={{ background: "#3b82f6" }}
-          >
-            {building ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {buildProgress ? `Loading order ${buildProgress.done} / ${buildProgress.total}…` : "Preparing…"}
-              </>
-            ) : (
-              <>
-                <PackageCheck className="w-5 h-5" />
-                Start Cluster Pick — {selected.size} orders
-              </>
-            )}
-          </button>
-        </div>
-      )}
+      <div className="fixed bottom-0 left-0 right-0 p-4"
+        style={{ background: "linear-gradient(to top, rgba(8,13,26,1) 70%, transparent)" }}>
+        <button
+          onClick={startCluster}
+          disabled={building || loading || orders.length === 0}
+          className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50"
+          style={{ background: "#3b82f6" }}
+        >
+          {building ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              {buildProgress ? `Loading ${buildProgress.done} / ${buildProgress.total}…` : "Preparing…"}
+            </>
+          ) : loading ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Loading orders…</>
+          ) : (
+            <>
+              <PackageCheck className="w-5 h-5" />
+              Start Cluster Pick — {clusterCount} orders
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
