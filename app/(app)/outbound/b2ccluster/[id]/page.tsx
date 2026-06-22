@@ -57,7 +57,11 @@ export default function B2CClusterOverviewPage() {
 
   async function closeCluster() {
     if (!confirm("Mark this cluster as completed?")) return;
-    await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, { method: "POST" });
+    const { authHeaders } = await import("@/lib/api");
+    await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
     router.back();
   }
 
