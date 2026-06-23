@@ -57,7 +57,8 @@ export default function OrderListPage() {
   async function load(whCode = warehouseCode) {
     setLoading(true); setError("");
     const PAGE_SIZE = 500;
-    const MAX_PAGES = 40; // safety cap (20,000 orders)
+    const BIG_SIZE = 5000;   // some WMS list endpoints honor a large pageSize (e.g. location/list uses 9999)
+    const MAX_PAGES = 40;    // safety cap
     const endpoints = [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/${type}/list`, `/api/wms/outbound/list`];
     const extractList = (json: unknown): Record<string, unknown>[] => {
       const j = json as Record<string, unknown>;
@@ -65,47 +66,57 @@ export default function OrderListPage() {
       const l = d?.list ?? d?.items ?? d ?? j?.list ?? j?.items ?? (Array.isArray(json) ? json : []);
       return Array.isArray(l) ? (l as Record<string, unknown>[]) : [];
     };
-    const reqBody = (page: number) => ({ page, limit: PAGE_SIZE, pageSize: PAGE_SIZE, orderType: type.toUpperCase(), warehouseCode: whCode });
+    const reqBody = (page: number, size: number) => ({ page, limit: size, pageSize: size, orderType: type.toUpperCase(), warehouseCode: whCode });
     const rowKey = (r: Record<string, unknown>) =>
       String(r.outboundBarcodeNo ?? r.salesOrderNo ?? r.orderCode ?? r.outboundCode ?? r.code ?? JSON.stringify(r));
 
-    // 1) find a working endpoint with page 1
-    let workingEp: string | null = null;
-    let lastLen = 0;
     const all: Record<string, unknown>[] = [];
     const seen = new Set<string>();
     const pushUnique = (rows: Record<string, unknown>[]) => {
-      for (const r of rows) { const k = rowKey(r); if (!seen.has(k)) { seen.add(k); all.push(r); } }
+      let added = 0;
+      for (const r of rows) { const k = rowKey(r); if (!seen.has(k)) { seen.add(k); all.push(r); added++; } }
+      return added;
+    };
+    const fetchPage = async (ep: string, page: number, size: number) => {
+      const res = await fetch(ep, { method: "POST", headers: authHeaders(), body: JSON.stringify(reqBody(page, size)) });
+      const json = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, rows: extractList(json), msg: (json as { message?: string })?.message };
     };
 
+    // 1) discover a working endpoint (page 1, normal size)
+    let workingEp: string | null = null;
+    let firstLen = 0;
     for (const ep of endpoints) {
       try {
-        const res = await fetch(ep, { method: "POST", headers: authHeaders(), body: JSON.stringify(reqBody(1)) });
-        const json = await res.json().catch(() => null);
-        if (!json) continue;
-        if (res.ok) { workingEp = ep; const rows = extractList(json); lastLen = rows.length; pushUnique(rows); break; }
-        setError(`HTTP ${res.status}: ${json?.message ?? ep}`);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+        const r = await fetchPage(ep, 1, PAGE_SIZE);
+        if (r.ok) { workingEp = ep; firstLen = r.rows.length; pushUnique(r.rows); break; }
+        setError(`HTTP ${r.status}: ${r.msg ?? ep}`);
+      } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     }
 
-    // 2) keep paging while the previous page was full (PAGE_SIZE), up to MAX_PAGES
-    if (workingEp) {
+    // 2) if page 1 was full, there are more → fetch the rest
+    if (workingEp && firstLen >= PAGE_SIZE) {
+      // fast path: try one big-pageSize call (works if backend honors large pageSize)
+      try {
+        const big = await fetchPage(workingEp, 1, BIG_SIZE);
+        if (big.ok) pushUnique(big.rows);
+      } catch { /* ignore, fall through to paging */ }
+
+      // page-by-page (works if backend honors `page`); stop on short page or no-new-rows
       let page = 2;
-      while (lastLen >= PAGE_SIZE && page <= MAX_PAGES) {
+      while (page <= MAX_PAGES) {
         try {
-          const res = await fetch(workingEp, { method: "POST", headers: authHeaders(), body: JSON.stringify(reqBody(page)) });
-          const json = await res.json().catch(() => null);
-          const rows = extractList(json);
-          if (!res.ok || rows.length === 0) break;
-          pushUnique(rows);
-          lastLen = rows.length;
+          const r = await fetchPage(workingEp, page, PAGE_SIZE);
+          if (!r.ok || r.rows.length === 0) break;
+          const added = pushUnique(r.rows);
+          if (r.rows.length < PAGE_SIZE) break;  // last page
+          if (added === 0) break;                // backend ignored `page` → avoid wasteful loop
           page++;
         } catch { break; }
       }
-      setOrders(all);
     }
+
+    if (workingEp) setOrders(all);
     setLoading(false);
   }
 
