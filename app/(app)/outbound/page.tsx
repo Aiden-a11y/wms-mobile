@@ -1,6 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { Building2, User, Store, Globe, ChevronLeft, PackageCheck } from "lucide-react";
+import { Building2, User, Store, Globe, ChevronLeft, PackageCheck, Layers } from "lucide-react";
 
 const TYPES = [
   { key: "b2b", label: "B2B", sub: "Business to Business",  icon: Building2,   color: "#3B82F6", bg: "rgba(59,130,246,0.15)" },
@@ -28,22 +28,39 @@ export default function OutboundPage() {
       </header>
 
       <main className="flex-1 p-5 space-y-5">
-        {/* Cluster Pick */}
+        {/* Batch Picking section */}
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Batch Picking</p>
-          <button onClick={() => router.push("/outbound/cluster")}
-            className="w-full rounded-2xl p-5 flex items-center gap-4 active:scale-[0.98] transition-all text-left"
-            style={{ ...CARD, border: "1px solid rgba(34,197,94,0.25)", background: "rgba(34,197,94,0.08)" }}>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: "rgba(34,197,94,0.2)" }}>
-              <PackageCheck className="w-6 h-6 text-green-400" />
-            </div>
-            <div>
-              <p className="text-base font-semibold text-white">Cluster Pick</p>
-              <p className="text-sm text-slate-400 mt-0.5">Up to 25 orders · one-pass routing</p>
-            </div>
-            <span className="ml-auto text-slate-500 text-xl">›</span>
-          </button>
+          <div className="space-y-3">
+            {/* WMS Batch Pick */}
+            <button onClick={() => router.push("/outbound/wmsbatch")}
+              className="w-full rounded-2xl p-5 flex items-center gap-4 active:scale-[0.98] transition-all text-left"
+              style={{ ...CARD, border: "1px solid rgba(139,92,246,0.25)", background: "rgba(139,92,246,0.08)" }}>
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: "rgba(139,92,246,0.2)" }}>
+                <Layers className="w-6 h-6 text-violet-400" />
+              </div>
+              <div>
+                <p className="text-base font-semibold text-white">Batch Pick</p>
+                <p className="text-sm text-slate-400 mt-0.5">WMS batch · location-based picking</p>
+              </div>
+              <span className="ml-auto text-slate-500 text-xl">›</span>
+            </button>
+            {/* Cluster Pick */}
+            <button onClick={() => router.push("/outbound/cluster")}
+              className="w-full rounded-2xl p-5 flex items-center gap-4 active:scale-[0.98] transition-all text-left"
+              style={{ ...CARD, border: "1px solid rgba(34,197,94,0.25)", background: "rgba(34,197,94,0.08)" }}>
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: "rgba(34,197,94,0.2)" }}>
+                <PackageCheck className="w-6 h-6 text-green-400" />
+              </div>
+              <div>
+                <p className="text-base font-semibold text-white">Cluster Pick</p>
+                <p className="text-sm text-slate-400 mt-0.5">Up to 25 orders · one-pass routing</p>
+              </div>
+              <span className="ml-auto text-slate-500 text-xl">›</span>
+            </button>
+          </div>
         </div>
 
         {/* Single order picking */}
