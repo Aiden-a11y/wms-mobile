@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, AlertCircle, Loader2, Layers, Package } from "lucide-react";
+import { ChevronLeft, RefreshCw, AlertCircle, Loader2, Layers, Package, CheckCheck } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 
 const DARK = { background: "radial-gradient(ellipse at 50% 0%, #1e2d4a 0%, #080d1a 60%)" };
@@ -32,6 +32,7 @@ export default function WmsBatchListPage() {
   const [error, setError] = useState("");
   const [warehouseCode] = useState("STOO1");
   const [customerCode] = useState("");
+  const [completing, setCompleting] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true); setError(""); setBatches([]);
@@ -89,6 +90,27 @@ export default function WmsBatchListPage() {
   }, [warehouseCode, customerCode]);
 
   useEffect(() => { load(); }, [load]);
+
+  async function completeBatch(batch: WmsBatch) {
+    setCompleting((prev) => new Set(prev).add(batch.batchCode));
+    try {
+      const ordRes = await fetch("/api/wms/batch/orders", {
+        method: "POST", headers: authHeaders(), body: JSON.stringify([batch.batchCode]),
+      });
+      const ordJson = await ordRes.json().catch(() => ({}));
+      const orders: { shippingOrderCode: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
+      if (!orders.length) return;
+
+      const orderCodes = orders.map((o) => o.shippingOrderCode);
+      await fetch("/api/wms/shipping/status-change", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ warehouseCode: batch.warehouseCode, customerCode: batch.customerCode, orderCodes, newStatus: "FA", completeDate: "", cancelComment: "" }),
+      });
+      setBatches((prev) => prev.filter((b) => b.batchCode !== batch.batchCode));
+    } finally {
+      setCompleting((prev) => { const next = new Set(prev); next.delete(batch.batchCode); return next; });
+    }
+  }
 
   const busy = loading || checking;
 
@@ -156,28 +178,37 @@ export default function WmsBatchListPage() {
               </div>
             </div>
             {batches.map((batch, i) => (
-              <button
-                key={batch.batchCode}
-                onClick={() => router.push(`/outbound/wmsbatch/${encodeURIComponent(batch.batchCode)}?wh=${batch.warehouseCode}&cust=${batch.customerCode}&name=${encodeURIComponent(batch.batchName)}&date=${batch.batchDate}&orders=${batch.orderCount}`)}
-                className="w-full px-4 py-3.5 flex items-center gap-3 active:bg-white/5 text-left transition-colors"
+              <div key={batch.batchCode} className="flex items-center gap-2 px-3 py-3"
                 style={i < batches.length - 1 ? { borderBottom: "1px solid rgba(255,255,255,0.05)" } : {}}>
                 {/* Icon */}
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
                   style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.25)" }}>
-                  <Package className="w-5 h-5 text-violet-400" />
+                  <Package className="w-4 h-4 text-violet-400" />
                 </div>
-                {/* Info */}
-                <div className="flex-1 min-w-0">
+                {/* Info — tap to pick */}
+                <button
+                  onClick={() => router.push(`/outbound/wmsbatch/${encodeURIComponent(batch.batchCode)}?wh=${batch.warehouseCode}&cust=${batch.customerCode}&name=${encodeURIComponent(batch.batchName)}&date=${batch.batchDate}&orders=${batch.orderCount}`)}
+                  className="flex-1 min-w-0 text-left active:opacity-70 transition-opacity">
                   <p className="text-sm font-bold text-white truncate">{batch.batchName || batch.batchCode}</p>
-                  <p className="font-mono text-xs text-slate-500 truncate mt-0.5">{batch.batchCode}</p>
-                  <div className="flex items-center gap-2 mt-1">
+                  <p className="font-mono text-xs text-slate-500 truncate">{batch.batchCode}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-xs text-violet-300 font-semibold">{batch.orderCount} orders</span>
                     <span className="text-slate-600">·</span>
                     <span className="text-xs text-slate-500">{fmtDate(batch.batchDate)}</span>
                   </div>
-                </div>
-                <span className="text-slate-500 text-xl flex-shrink-0">›</span>
-              </button>
+                </button>
+                {/* Complete button */}
+                <button
+                  onClick={() => completeBatch(batch)}
+                  disabled={completing.has(batch.batchCode)}
+                  className="flex items-center gap-1 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95 disabled:opacity-50 flex-shrink-0"
+                  style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)", color: "#6ee7b7" }}>
+                  {completing.has(batch.batchCode)
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <CheckCheck className="w-3.5 h-3.5" />}
+                  Done
+                </button>
+              </div>
             ))}
           </div>
         )}
