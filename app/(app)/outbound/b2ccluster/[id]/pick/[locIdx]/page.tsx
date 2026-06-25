@@ -234,12 +234,30 @@ export default function B2CClusterPickPage() {
           })}
         </div>
 
+        {/* ── Wrong location error banner ── */}
+        {locError && step === "scan_loc" && (
+          <div className="rounded-2xl p-4 flex items-start gap-3 animate-pulse"
+            style={{ background: "rgba(239,68,68,0.2)", border: "2px solid rgba(239,68,68,0.6)" }}>
+            <AlertCircle className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-black text-red-300">Wrong Location!</p>
+              <p className="text-xs text-red-400 mt-0.5">{locError}</p>
+            </div>
+          </div>
+        )}
+
         {/* ── scan_loc ── */}
         {step === "scan_loc" && (
-          <div className="rounded-2xl p-5 space-y-4" style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)" }}>
+          <div className="rounded-2xl p-5 space-y-4"
+            style={{
+              background: locError ? "rgba(239,68,68,0.08)" : "rgba(59,130,246,0.12)",
+              border: locError ? "1px solid rgba(239,68,68,0.4)" : "1px solid rgba(59,130,246,0.3)",
+            }}>
             <div className="flex items-center gap-2">
-              <ScanLine className="w-5 h-5 text-blue-400" />
-              <p className="text-sm font-bold text-blue-300">Scan Location Barcode</p>
+              <ScanLine className="w-5 h-5" style={{ color: locError ? "#f87171" : "#60a5fa" }} />
+              <p className="text-sm font-bold" style={{ color: locError ? "#fca5a5" : "#93c5fd" }}>
+                Scan Location Barcode
+              </p>
             </div>
             <p className="font-mono text-lg font-black text-white">{grp.locationCode}</p>
             {currentTask && (
@@ -256,21 +274,16 @@ export default function B2CClusterPickPage() {
             <input
               ref={locRef}
               value={locInput}
-              onChange={(e) => setLocInput(e.target.value)}
+              onChange={(e) => { setLocInput(e.target.value); setLocError(""); }}
               onKeyDown={(e) => e.key === "Enter" && handleLocScan()}
               placeholder="Scan or type location code…"
-              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white text-sm font-mono placeholder:text-slate-500 focus:outline-none focus:border-blue-400"
+              className="w-full bg-white/10 rounded-xl px-4 py-3 text-white text-sm font-mono placeholder:text-slate-500 focus:outline-none"
+              style={{ border: locError ? "2px solid rgba(239,68,68,0.6)" : "1px solid rgba(255,255,255,0.2)" }}
               autoComplete="off" autoCorrect="off" spellCheck={false}
             />
-            {locError && (
-              <div className="flex items-center gap-2 text-red-400 text-sm">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                {locError}
-              </div>
-            )}
             <button onClick={handleLocScan} disabled={!locInput.trim()}
               className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-all"
-              style={{ background: "#3b82f6" }}>
+              style={{ background: locError ? "#dc2626" : "#3b82f6" }}>
               Confirm Location
             </button>
           </div>
