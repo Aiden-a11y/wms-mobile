@@ -79,7 +79,8 @@ export default function WmsBatchListPage() {
         })
       );
 
-      setBatches(results.filter(Boolean) as WmsBatch[]);
+      const done = new Set<string>(JSON.parse(sessionStorage.getItem("wmsbatch_done") ?? "[]"));
+      setBatches((results.filter(Boolean) as WmsBatch[]).filter((b) => !done.has(b.batchCode)));
       setChecking(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -91,25 +92,18 @@ export default function WmsBatchListPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function completeBatch(batch: WmsBatch) {
-    setCompleting((prev) => new Set(prev).add(batch.batchCode));
+  function hideBatch(batchCode: string) {
     try {
-      const ordRes = await fetch("/api/wms/batch/orders", {
-        method: "POST", headers: authHeaders(), body: JSON.stringify([batch.batchCode]),
-      });
-      const ordJson = await ordRes.json().catch(() => ({}));
-      const orders: { shippingOrderCode: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
-      if (!orders.length) return;
+      const existing = JSON.parse(sessionStorage.getItem("wmsbatch_done") ?? "[]") as string[];
+      sessionStorage.setItem("wmsbatch_done", JSON.stringify([...new Set([...existing, batchCode])]));
+    } catch { /* ignore */ }
+    setBatches((prev) => prev.filter((b) => b.batchCode !== batchCode));
+  }
 
-      const orderCodes = orders.map((o) => o.shippingOrderCode);
-      await fetch("/api/wms/shipping/status-change", {
-        method: "POST", headers: authHeaders(),
-        body: JSON.stringify({ warehouseCode: batch.warehouseCode, customerCode: batch.customerCode, orderCodes, newStatus: "FA", completeDate: "", cancelComment: "" }),
-      });
-      setBatches((prev) => prev.filter((b) => b.batchCode !== batch.batchCode));
-    } finally {
-      setCompleting((prev) => { const next = new Set(prev); next.delete(batch.batchCode); return next; });
-    }
+  function completeBatch(batch: WmsBatch) {
+    setCompleting((prev) => new Set(prev).add(batch.batchCode));
+    hideBatch(batch.batchCode);
+    setCompleting((prev) => { const next = new Set(prev); next.delete(batch.batchCode); return next; });
   }
 
   const busy = loading || checking;

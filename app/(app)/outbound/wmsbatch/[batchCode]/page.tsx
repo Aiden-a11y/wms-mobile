@@ -64,8 +64,6 @@ function WmsBatchPickInner() {
   const [skuScan, setSkuScan] = useState("");
   const [skuError, setSkuError] = useState("");
 
-  const [completing, setCompleting] = useState(false);
-  const [completeError, setCompleteError] = useState("");
 
   const locRef = useRef<HTMLInputElement>(null);
   const skuRef = useRef<HTMLInputElement>(null);
@@ -187,36 +185,13 @@ function WmsBatchPickInner() {
     });
   }
 
-  // ── Complete all orders ────────────────────────────────────────────────────
-  async function completeBatch() {
-    if (!orderCodes.length) { router.replace("/outbound/wmsbatch"); return; }
-    setCompleting(true); setCompleteError("");
+  // ── Mark batch as done locally (no WMS status change) ────────────────────
+  function completeBatch() {
     try {
-      const body = {
-        warehouseCode,
-        customerCode,
-        orderCodes,
-        newStatus: "FA",
-        completeDate: "",
-        cancelComment: "",
-      };
-      const res = await fetch("/api/wms/shipping/status-change", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify(body),
-      });
-      const json = await res.json().catch(() => ({}));
-      const ok = !!(res.ok && ((json as Record<string, unknown>)?.isSuccess ?? true));
-      if (!ok) {
-        setCompleteError(String((json as Record<string, unknown>)?.message ?? "Status change failed"));
-        setCompleting(false);
-        return;
-      }
-      router.replace("/outbound/wmsbatch");
-    } catch (e) {
-      setCompleteError(e instanceof Error ? e.message : "Failed to complete");
-      setCompleting(false);
-    }
+      const existing = JSON.parse(sessionStorage.getItem("wmsbatch_done") ?? "[]") as string[];
+      sessionStorage.setItem("wmsbatch_done", JSON.stringify([...new Set([...existing, batchCode])]));
+    } catch { /* ignore */ }
+    router.replace("/outbound/wmsbatch");
   }
 
   if (loading) return (
@@ -269,23 +244,12 @@ function WmsBatchPickInner() {
           ))}
         </div>
 
-        {completeError && (
-          <div className="rounded-2xl p-3 flex items-start gap-2"
-            style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
-            <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-red-300">{completeError}</p>
-          </div>
-        )}
-
         <button
           onClick={completeBatch}
-          disabled={completing}
-          className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-60 transition-all"
+          className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
           style={{ background: "#7c3aed" }}
         >
-          {completing
-            ? <><Loader2 className="w-5 h-5 animate-spin" /> Completing…</>
-            : <><CheckCircle2 className="w-5 h-5" /> Complete &amp; Close Batch</>}
+          <CheckCircle2 className="w-5 h-5" /> Done — Close Batch
         </button>
       </main>
     </div>
