@@ -64,8 +64,12 @@ export default function WmsBatchListPage() {
               body: JSON.stringify([batch.batchCode]),
             });
             const ordJson = await ordRes.json().catch(() => ({}));
-            const orders: { shippingOrderCode: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
+            const orders: { shippingOrderCode: string; status?: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
             if (!orders.length) return null;
+
+            // Hide if all orders are already completed (FA)
+            const allDone = orders.every((o) => String(o.status ?? "").toUpperCase() === "FA");
+            if (allDone) return null;
 
             const firstCode = orders[0].shippingOrderCode;
             const itemRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(firstCode)}`, { headers: authHeaders() });
