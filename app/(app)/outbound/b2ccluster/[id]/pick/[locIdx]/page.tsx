@@ -178,14 +178,21 @@ export default function B2CClusterPickPage() {
     }
   }
 
-  function goNext() {
+  async function goNext() {
     if (!cluster) return;
     const doneSet = getDoneSet(id);
     const nextLoc = cluster.locationGroups.findIndex((_, i) => i > locIdx && !doneSet.has(i));
     if (nextLoc >= 0) {
       router.replace(`/outbound/b2ccluster/${encodeURIComponent(id)}/pick/${nextLoc}`);
     } else {
-      router.replace(`/outbound/b2ccluster/${encodeURIComponent(id)}`);
+      // All locations done — close cluster directly from pick page
+      // (avoids relying on overview page remounting, which Next.js router cache may skip)
+      await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: authHeaders(),
+      }).catch(() => {});
+      localStorage.removeItem(`b2ccluster_done_${id}`);
+      router.replace("/outbound/cluster");
     }
   }
 

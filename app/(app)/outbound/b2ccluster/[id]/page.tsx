@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, CheckCircle2, Loader2, MapPin } from "lucide-react";
 import type { B2CCluster } from "@/lib/b2c-cluster";
@@ -33,8 +33,6 @@ export default function B2CClusterOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [doneSet, setDoneSet] = useState<Set<number>>(new Set());
   const [closing, setClosing] = useState(false);
-  const autoClosedRef = useRef(false);
-
   useEffect(() => {
     fetch(`/api/cluster?id=${encodeURIComponent(id)}`)
       .then((r) => r.json())
@@ -66,14 +64,6 @@ export default function B2CClusterOverviewPage() {
     if (res.ok) localStorage.removeItem(`b2ccluster_done_${id}`);
     router.replace("/outbound/cluster");
   }
-
-  // Auto-complete when all locations are picked
-  useEffect(() => {
-    if (allDone && !loading && !autoClosedRef.current) {
-      autoClosedRef.current = true;
-      closeCluster();
-    }
-  }, [allDone, loading]); // eslint-disable-line
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={DARK}>
@@ -179,11 +169,12 @@ export default function B2CClusterOverviewPage() {
       <div className="fixed bottom-0 left-0 right-0 p-4"
         style={{ background: "linear-gradient(to top, rgba(8,13,26,1) 70%, transparent)" }}>
         {allDone ? (
-          <button disabled
-            className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all opacity-80"
+          <button onClick={closeCluster} disabled={closing}
+            className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-60"
             style={{ background: "#10b981" }}>
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Completing…
+            {closing
+              ? <><Loader2 className="w-5 h-5 animate-spin" /> Completing…</>
+              : <><CheckCircle2 className="w-5 h-5" /> Complete Cluster</>}
           </button>
         ) : (
           <button
