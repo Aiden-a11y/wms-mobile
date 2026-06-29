@@ -58,11 +58,16 @@ export default function B2CClusterOverviewPage() {
   async function closeCluster() {
     if (!confirm("Mark this cluster as completed?")) return;
     const { authHeaders } = await import("@/lib/api");
-    await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
+    const res = await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
       method: "POST",
       headers: authHeaders(),
     });
-    router.back();
+    if (res.ok) {
+      // Clear local done-state for this cluster
+      localStorage.removeItem(`b2ccluster_done_${id}`);
+    }
+    // replace so back-button doesn't return to a completed cluster
+    router.replace("/outbound/cluster");
   }
 
   if (loading) return (
