@@ -15,6 +15,11 @@ export async function POST(req: NextRequest) {
 
   const cluster = (typeof raw === "string" ? JSON.parse(raw) : raw) as B2CCluster;
 
+  // Idempotency: if already completed, skip WMS status-change to prevent DA→CA regression
+  if (cluster.status === "completed") {
+    return NextResponse.json({ ok: true, skipped: true });
+  }
+
   // Mark completed in Redis
   const updated: B2CCluster = {
     ...cluster,
