@@ -1,14 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag, Layers, CheckCheck } from "lucide-react";
+import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck, Tag } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import {
   buildClusterPickList, saveCluster, saveLocationGroups,
   listActiveClusterIds, getCluster,
   type Cluster,
 } from "@/lib/cluster";
-import type { Batch } from "@/lib/batch";
 import type { B2CCluster } from "@/lib/b2c-cluster";
 import { binColor } from "@/lib/b2c-cluster";
 
@@ -36,9 +35,7 @@ export default function ClusterPage() {
   const [buildProgress, setBuildProgress] = useState<{ done: number; total: number } | null>(null);
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [activeClusters, setActiveClusters] = useState<Cluster[]>([]);
-  const [redisBatches, setRedisBatches] = useState<Batch[]>([]);
   const [b2cClusters, setB2cClusters] = useState<B2CCluster[]>([]);
-  const [closing, setClosing] = useState<Set<string>>(new Set());
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -65,50 +62,6 @@ export default function ClusterPage() {
       })
       .catch(() => {});
   }, []);
-
-  useEffect(() => {
-    fetch("/api/batch")
-      .then((r) => r.json())
-      .then(async (data: Batch[]) => {
-        if (!Array.isArray(data) || data.length === 0) return;
-        // Filter: show only batches that have WMS picking locations assigned
-        const results = await Promise.all(
-          data.map(async (batch) => {
-            const firstOrder = batch.orders[0];
-            if (!firstOrder) return null;
-            try {
-              const res = await fetch(
-                `/api/wms/shipping/items/${encodeURIComponent(firstOrder.orderCode)}`,
-                { headers: authHeaders() }
-              );
-              const json = await res.json().catch(() => ({})) as Record<string, unknown>;
-              const d = (json?.data ?? {}) as Record<string, unknown>;
-              const assignments = Array.isArray(d.assignments) ? d.assignments : [];
-              return assignments.length > 0 ? batch : null;
-            } catch {
-              return null;
-            }
-          })
-        );
-        setRedisBatches(results.filter(Boolean) as Batch[]);
-      })
-      .catch(() => {});
-  }, []);
-
-  function startBatch(batch: Batch) {
-    router.push(`/outbound/batch/${encodeURIComponent(batch.id)}`);
-  }
-
-  async function closeBatch(batch: Batch) {
-    if (!confirm(`Close batch (${batch.orderCount} orders)?\nThis will mark it as completed in the dashboard.`)) return;
-    setClosing((prev) => new Set(prev).add(batch.id));
-    try {
-      await fetch(`/api/batch/close?id=${encodeURIComponent(batch.id)}`, { method: "POST" });
-      setRedisBatches((prev) => prev.filter((b) => b.id !== batch.id));
-    } finally {
-      setClosing((prev) => { const next = new Set(prev); next.delete(batch.id); return next; });
-    }
-  }
 
   async function load() {
     setLoading(true); setError("");
@@ -185,56 +138,6 @@ export default function ClusterPage() {
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-32 space-y-4 overflow-y-auto">
-        {/* Dashboard batches (from Redis) */}
-        {redisBatches.length > 0 && (
-          <div className="rounded-2xl overflow-hidden" style={GLASS}>
-            <div className="px-4 py-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(139,92,246,0.15)" }}>
-              <div className="flex items-center gap-2">
-                <Layers className="w-3.5 h-3.5 text-violet-400" />
-                <p className="text-xs font-semibold text-violet-400 uppercase tracking-wider">Batch Pick — Dashboard</p>
-              </div>
-            </div>
-            {redisBatches.map((batch) => {
-              const topSkus = batch.skuList.slice(0, 3);
-              return (
-                <div key={batch.id} className="px-4 py-3 flex items-center gap-3"
-                  style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <p className="text-sm font-semibold text-white">{batch.orderCount} orders</p>
-                      <span className="text-xs text-violet-400 bg-violet-400/10 px-1.5 py-0.5 rounded">{batch.skuList.length} SKUs</span>
-                    </div>
-                    <p className="text-xs text-slate-500 truncate">
-                      {topSkus.map(({ sku, qty }) => `${sku}×${qty}`).join(" · ")}{batch.skuList.length > 3 ? ` +${batch.skuList.length - 3} more` : ""}
-                    </p>
-                    <p className="text-xs text-slate-600 mt-0.5">{new Date(batch.createdAt).toLocaleString()}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => closeBatch(batch)}
-                      disabled={closing.has(batch.id)}
-                      className="flex items-center gap-1 px-2.5 py-2 rounded-xl text-xs font-semibold text-emerald-300 transition-all active:scale-95 disabled:opacity-50"
-                      style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)" }}
-                    >
-                      {closing.has(batch.id)
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : <CheckCheck className="w-3.5 h-3.5" />}
-                      Close
-                    </button>
-                    <button
-                      onClick={() => startBatch(batch)}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all active:scale-95"
-                      style={{ background: "rgba(139,92,246,0.8)" }}
-                    >
-                      Pick →
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
         {/* Dashboard B2C Clusters */}
         {b2cClusters.length > 0 && (
           <div className="rounded-2xl overflow-hidden" style={GLASS}>
