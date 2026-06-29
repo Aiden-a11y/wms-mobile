@@ -135,8 +135,28 @@ function makeLocKey(zone: string, aisle: string, bay: string, level: string, pos
 }
 
 // ── Build cluster pick list ───────────────────────────────────────────────────
-// Iterates candidates sequentially, skips orders with no picking lines,
-// collects up to maxBins valid orders, returns both the filtered bins and groups.
+// Phase 1: parallel batch-check picking status (BATCH_SIZE at a time), stop once
+//          we have maxBins valid orders — no need to scan all 500 candidates.
+// Phase 2: parallel fetch pick tasks for the maxBins valid orders.
+
+const BATCH_SIZE = 20; // concurrent picking-status checks per batch
+
+async function fetchPickingItems(orderCode: string, type: string): Promise<unknown[]> {
+  const endpoints = [
+    `/api/wms/shipping/${type}/picking/${orderCode}`,
+    `/api/wms/shipping/picking/${orderCode}`,
+    `/api/wms/outbound/${type}/picking/${orderCode}`,
+  ];
+  for (const ep of endpoints) {
+    try {
+      const r = await fetch(ep, { headers: authHeaders() });
+      const j = await r.json().catch(() => null);
+      const list = j?.data?.list ?? j?.data?.items ?? j?.data ?? j?.list ?? j?.items ?? (Array.isArray(j) ? j : null);
+      if (r.ok && Array.isArray(list) && list.length > 0) return list;
+    } catch { /* try next endpoint */ }
+  }
+  return [];
+}
 
 export async function buildClusterPickList(
   candidates: Array<{ orderCode: string; customerCode: string }>,
@@ -145,46 +165,44 @@ export async function buildClusterPickList(
   warehouseCode: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ bins: ClusterBin[]; groups: LocationGroup[] }> {
-  const allTasks: ClusterPickTask[] = [];
-  const bins: ClusterBin[] = [];
+  // Phase 1: scan candidates in parallel batches until we have maxBins valid orders
+  const valid: Array<{ cand: { orderCode: string; customerCode: string }; rawItems: unknown[] }> = [];
   let checked = 0;
 
-  for (const cand of candidates) {
-    if (bins.length >= maxBins) break;
+  for (let i = 0; i < candidates.length && valid.length < maxBins; i += BATCH_SIZE) {
+    const batch = candidates.slice(i, i + BATCH_SIZE);
     onProgress?.(checked, candidates.length);
-    checked++;
 
-    let rawItems: unknown[] = [];
+    const batchResults = await Promise.all(
+      batch.map(async (cand) => ({ cand, rawItems: await fetchPickingItems(cand.orderCode, type) }))
+    );
 
-    // Try picking lines first (assigned locations only)
-    const pickingEndpoints = [
-      `/api/wms/shipping/${type}/picking/${cand.orderCode}`,
-      `/api/wms/shipping/picking/${cand.orderCode}`,
-      `/api/wms/outbound/${type}/picking/${cand.orderCode}`,
-    ];
-    for (const ep of pickingEndpoints) {
-      try {
-        const r = await fetch(ep, { headers: authHeaders() });
-        const j = await r.json().catch(() => null);
-        const list = j?.data?.list ?? j?.data?.items ?? j?.data ?? j?.list ?? j?.items ?? (Array.isArray(j) ? j : null);
-        if (r.ok && Array.isArray(list) && list.length > 0) { rawItems = list; break; }
-      } catch { /* try next */ }
-    }
-
-    // Skip orders with no picking location assigned
-    if (rawItems.length === 0) continue;
-
-    const binNo = bins.length + 1;
-    const bin: ClusterBin = { binNo, orderCode: cand.orderCode, customerCode: cand.customerCode };
-    bins.push(bin);
-
-    const tasks = await buildPickList(rawItems as Record<string, unknown>[], warehouseCode, cand.customerCode);
-    for (const task of tasks) {
-      allTasks.push({ ...task, binNo, orderCode: cand.orderCode });
-    }
-
+    checked += batch.length;
     onProgress?.(checked, candidates.length);
+
+    for (const { cand, rawItems } of batchResults) {
+      if (rawItems.length > 0 && valid.length < maxBins) {
+        valid.push({ cand, rawItems });
+      }
+    }
   }
+
+  // Phase 2: build pick tasks for all valid orders in parallel
+  const bins: ClusterBin[] = valid.map(({ cand }, i) => ({
+    binNo: i + 1,
+    orderCode: cand.orderCode,
+    customerCode: cand.customerCode,
+  }));
+
+  const taskArrays = await Promise.all(
+    valid.map(({ cand, rawItems }, i) =>
+      buildPickList(rawItems as Record<string, unknown>[], warehouseCode, cand.customerCode).then(
+        (tasks) => tasks.map((t) => ({ ...t, binNo: i + 1, orderCode: cand.orderCode }) as ClusterPickTask)
+      )
+    )
+  );
+
+  const allTasks = taskArrays.flat();
 
   // Group by location
   const groupMap = new Map<string, LocationGroup>();

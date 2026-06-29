@@ -39,6 +39,7 @@ export default function ClusterPage() {
   const [redisBatches, setRedisBatches] = useState<Batch[]>([]);
   const [b2cClusters, setB2cClusters] = useState<B2CCluster[]>([]);
   const [closing, setClosing] = useState<Set<string>>(new Set());
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   useEffect(() => {
     fetch("/api/wms/combo/warehouse", { headers: authHeaders() })
@@ -121,10 +122,15 @@ export default function ClusterPage() {
         setError(`HTTP ${res.status}: ${json?.message ?? ep}`);
       } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     }
+    setLastRefresh(new Date());
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, [warehouseCode]); // eslint-disable-line
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 10 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [warehouseCode]); // eslint-disable-line
 
   // Start cluster: iterate all orders, skip ones with no picking locations, fill up to MAX_CLUSTER
   async function startCluster() {
@@ -167,7 +173,11 @@ export default function ClusterPage() {
         </button>
         <div className="flex-1">
           <p className="text-base font-bold text-white">Cluster Pick</p>
-          <p className="text-xs text-slate-400">Auto-bundle up to {MAX_CLUSTER} B2C orders</p>
+          <p className="text-xs text-slate-400">
+            {lastRefresh
+              ? `Updated ${lastRefresh.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · auto 10min`
+              : `Auto-bundle up to ${MAX_CLUSTER} B2C orders`}
+          </p>
         </div>
         <button onClick={load} disabled={loading} className="p-1 text-slate-400 active:text-white">
           <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
