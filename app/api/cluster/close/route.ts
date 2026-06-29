@@ -58,8 +58,11 @@ export async function POST(req: NextRequest) {
 
   // Idempotency: if already completed, skip WMS status-change to prevent DA→CA regression
   if (cluster.status === "completed") {
+    console.warn(`[cluster/close] DUPLICATE CALL blocked id=${id} completedAt=${cluster.completedAt}`);
     return NextResponse.json({ ok: true, skipped: true });
   }
+
+  console.log(`[cluster/close] START id=${id} bins=${cluster.bins.length} warehouse=${cluster.warehouseCode}`);
 
   // Mark completed in Redis first so concurrent calls are idempotent
   const updated: B2CCluster = {
@@ -104,6 +107,9 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        if (skipped.length > 0) {
+          console.log(`[cluster/close] SKIPPED DA/FA orders id=${id} skipped=${skipped.join(",")}`);
+        }
         if (eligible.length === 0) return;
 
         await fetch(`${WMS_BASE}/shipping/status-change`, {
@@ -122,5 +128,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  console.log(`[cluster/close] DONE id=${id} sent=${sent.length} skipped=${skipped.length}`);
   return NextResponse.json({ ok: true, sent: sent.length, skipped: skipped.length, skippedOrders: skipped });
 }
