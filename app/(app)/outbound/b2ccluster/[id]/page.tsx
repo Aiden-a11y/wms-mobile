@@ -84,7 +84,14 @@ export default function B2CClusterOverviewPage() {
           <ChevronLeft className="w-6 h-6" />
         </button>
         <div className="flex-1">
-          <p className="text-base font-bold text-white">Cluster Pick</p>
+          <div className="flex items-center gap-2">
+            <p className="text-base font-bold text-white">Cluster Pick</p>
+            {cluster.clusterNo != null && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-black bg-indigo-500/30 text-indigo-300 tracking-wide">
+                #{String(cluster.clusterNo).padStart(4, "0")}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-400">{cluster.bins.length} bins · {cluster.locationGroups.length} locations · {cluster.warehouseCode}</p>
         </div>
       </header>

@@ -178,7 +178,14 @@ export default function ClusterPage() {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-white">{c.bins.length} bins · {c.locationGroups.length} locations</p>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      {c.clusterNo != null && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-black bg-indigo-500/30 text-indigo-300 tracking-wide">
+                          #{String(c.clusterNo).padStart(4, "0")}
+                        </span>
+                      )}
+                      <p className="text-sm font-semibold text-white">{c.bins.length} bins · {c.locationGroups.length} locations</p>
+                    </div>
                     <p className="text-xs text-slate-500">{new Date(c.createdAt).toLocaleString()}</p>
                   </div>
                   <span className="text-slate-500 text-lg flex-shrink-0">›</span>

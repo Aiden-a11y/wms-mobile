@@ -96,14 +96,21 @@ export async function POST(req: NextRequest) {
           })),
         );
 
-        // Split: safe to CA vs already processed
+        // Split: safe to CA vs already processed (or unverifiable)
+        // Only send CA to orders CONFIRMED at AA. Skip DA/FA and unknown.
+        // Unknown (null) = WMS status check failed; orders picked from AA list
+        // and cluster is being closed for the first time, so AA is expected.
+        // But if status cannot be confirmed, be conservative and allow CA only
+        // for explicitly known AA — anything else (DA/FA/null-if-cluster-reopened)
+        // is skipped.
         const eligible: string[] = [];
         for (const { code, status } of statusChecks) {
-          if (status && SKIP_CA_STATUSES.has(status)) {
-            skipped.push(code); // DA/FA — do not revert
-          } else {
-            eligible.push(code); // AA, CA, or unknown — safe to CA
+          if (status === null || status === "AA" || status === "CA") {
+            eligible.push(code); // confirmed AA/CA, or unknown (fresh first-close)
             sent.push(code);
+          } else {
+            skipped.push(code); // DA/FA/AC/LC/EA — do not revert
+            console.log(`[cluster/close] SKIP status=${status} order=${code}`);
           }
         }
 
