@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, CheckCircle2, Loader2, MapPin } from "lucide-react";
 import type { B2CCluster } from "@/lib/b2c-cluster";
@@ -32,13 +32,13 @@ export default function B2CClusterOverviewPage() {
   const [cluster, setCluster] = useState<B2CCluster | null>(null);
   const [loading, setLoading] = useState(true);
   const [doneSet, setDoneSet] = useState<Set<number>>(new Set());
+  const [closing, setClosing] = useState(false);
+  const autoClosedRef = useRef(false);
 
   useEffect(() => {
     fetch(`/api/cluster?id=${encodeURIComponent(id)}`)
       .then((r) => r.json())
-      .then((data) => {
-        if (data) setCluster(data as B2CCluster);
-      })
+      .then((data) => { if (data) setCluster(data as B2CCluster); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [id]);
@@ -50,25 +50,30 @@ export default function B2CClusterOverviewPage() {
   const nextLocIdx = cluster
     ? cluster.locationGroups.findIndex((_, i) => !doneSet.has(i))
     : -1;
-  const allDone = cluster ? nextLocIdx === -1 : false;
+  const allDone = cluster ? nextLocIdx === -1 && cluster.locationGroups.length > 0 : false;
   const donePct = cluster && cluster.locationGroups.length > 0
     ? Math.round((doneSet.size / cluster.locationGroups.length) * 100)
     : 0;
 
   async function closeCluster() {
-    if (!confirm("Mark this cluster as completed?")) return;
+    if (closing) return;
+    setClosing(true);
     const { authHeaders } = await import("@/lib/api");
     const res = await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
       method: "POST",
       headers: authHeaders(),
     });
-    if (res.ok) {
-      // Clear local done-state for this cluster
-      localStorage.removeItem(`b2ccluster_done_${id}`);
-    }
-    // replace so back-button doesn't return to a completed cluster
+    if (res.ok) localStorage.removeItem(`b2ccluster_done_${id}`);
     router.replace("/outbound/cluster");
   }
+
+  // Auto-complete when all locations are picked
+  useEffect(() => {
+    if (allDone && !loading && !autoClosedRef.current) {
+      autoClosedRef.current = true;
+      closeCluster();
+    }
+  }, [allDone, loading]); // eslint-disable-line
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={DARK}>
@@ -174,11 +179,11 @@ export default function B2CClusterOverviewPage() {
       <div className="fixed bottom-0 left-0 right-0 p-4"
         style={{ background: "linear-gradient(to top, rgba(8,13,26,1) 70%, transparent)" }}>
         {allDone ? (
-          <button onClick={closeCluster}
-            className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+          <button disabled
+            className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all opacity-80"
             style={{ background: "#10b981" }}>
-            <CheckCircle2 className="w-5 h-5" />
-            Close Cluster (All Done)
+            <Loader2 className="w-5 h-5 animate-spin" />
+            Completing…
           </button>
         ) : (
           <button
