@@ -333,13 +333,15 @@ export default function InventoryMovePage() {
                       <div className="flex items-center gap-2">
                         <Package className="w-4 h-4 text-blue-300 flex-shrink-0" />
                         <span className="font-mono text-sm font-semibold text-white flex-1 truncate">{s.productSku}</span>
-                        <span className="text-sm font-bold text-white">{s.qty}</span>
+                        <span className="text-xl font-black text-white">{s.qty}</span>
                       </div>
+                      {s.customerCode && (
+                        <p className="text-base font-bold text-blue-300 mt-1">{s.customerCode}</p>
+                      )}
                       <div className="flex gap-2 mt-1.5 flex-wrap">
                         {s.lotNo && <Tag>LOT {s.lotNo}</Tag>}
                         {s.expireDate && <Tag>EXP {s.expireDate}</Tag>}
                         <Tag>{s.itemCondition || "GOOD"}</Tag>
-                        {s.customerCode && <Tag>{s.customerCode}</Tag>}
                       </div>
                     </button>
                   );
@@ -352,14 +354,16 @@ export default function InventoryMovePage() {
                 <div className="flex items-center gap-2">
                   <Package className="w-4 h-4 text-blue-300" />
                   <span className="font-mono text-sm font-semibold text-white flex-1 truncate">{sel.productSku}</span>
-                  <span className="text-xs text-slate-400">on hand {sel.qty}</span>
+                  <span className="text-base font-black text-white">on hand {sel.qty}</span>
                 </div>
-                {sel.productName && <p className="text-xs text-slate-400 mt-1 truncate">{sel.productName}</p>}
+                {sel.customerCode && (
+                  <p className="text-lg font-black text-blue-300 mt-1">{sel.customerCode}</p>
+                )}
+                {sel.productName && <p className="text-xs text-slate-400 mt-0.5 truncate">{sel.productName}</p>}
                 <div className="flex gap-2 mt-2 flex-wrap">
                   {sel.lotNo && <Tag>LOT {sel.lotNo}</Tag>}
                   {sel.expireDate && <Tag>EXP {sel.expireDate}</Tag>}
                   <Tag>{sel.itemCondition || "GOOD"}</Tag>
-                  {sel.customerCode && <Tag>{sel.customerCode}</Tag>}
                 </div>
 
                 <div className="flex items-center justify-between mt-4 mb-2">
