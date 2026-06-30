@@ -185,7 +185,7 @@ export default function InventoryMovePage() {
       for (const r of rows) {
         const s = toStock(r);
         if (!s.productSku || s.qty <= 0) continue;
-        const k = `${s.productSku}|${s.lotNo}|${s.expireDate}|${s.itemCondition}`;
+        const k = `${s.customerCode}|${s.productSku}|${s.lotNo}|${s.expireDate}|${s.itemCondition}`;
         if (!seen.has(k)) seen.set(k, s);
       }
       const list = [...seen.values()];
