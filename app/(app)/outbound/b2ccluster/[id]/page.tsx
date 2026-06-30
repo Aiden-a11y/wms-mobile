@@ -65,6 +65,13 @@ export default function B2CClusterOverviewPage() {
     router.replace("/outbound/cluster");
   }
 
+  // Auto-complete the moment picking finishes — no manual "Complete" action exists
+  // anywhere in the app. /api/cluster/close is itself idempotent (skips if already
+  // completed), so this effect re-running on remount/re-render is harmless.
+  useEffect(() => {
+    if (allDone && !closing) closeCluster();
+  }, [allDone]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={DARK}>
       <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
@@ -176,13 +183,10 @@ export default function B2CClusterOverviewPage() {
       <div className="fixed bottom-0 left-0 right-0 p-4"
         style={{ background: "linear-gradient(to top, rgba(8,13,26,1) 70%, transparent)" }}>
         {allDone ? (
-          <button onClick={closeCluster} disabled={closing}
-            className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-60"
+          <div className="w-full h-14 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2"
             style={{ background: "#10b981" }}>
-            {closing
-              ? <><Loader2 className="w-5 h-5 animate-spin" /> Completing…</>
-              : <><CheckCircle2 className="w-5 h-5" /> Complete Cluster</>}
-          </button>
+            <Loader2 className="w-5 h-5 animate-spin" /> Completing…
+          </div>
         ) : (
           <button
             onClick={() => nextLocIdx >= 0 && router.push(`/outbound/b2ccluster/${encodeURIComponent(id)}/pick/${nextLocIdx}`)}
