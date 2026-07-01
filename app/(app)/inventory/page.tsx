@@ -114,6 +114,9 @@ export default function InventoryMovePage() {
   const [toError, setToError] = useState("");
   const [moving, setMoving] = useState(false);
 
+  const [skuLocs, setSkuLocs] = useState<{ loc: string; qty: number; lotNo: string; condition: string }[]>([]);
+  const [skuLocsLoading, setSkuLocsLoading] = useState(false);
+
   const [result, setResult] = useState<{ from: string; to: string; sku: string; qty: number } | null>(null);
 
   const fromRef = useRef<HTMLInputElement>(null);
@@ -260,7 +263,7 @@ export default function InventoryMovePage() {
   function reset() {
     setStep("from"); setFromScan(""); setFromLoc(null); setFromError("");
     setProdScan(""); setProdError(""); setStock([]); setSel(null); setQty(1);
-    setToScan(""); setToError(""); setResult(null);
+    setToScan(""); setToError(""); setResult(null); setSkuLocs([]);
   }
   function back() {
     if (step === "from") router.back();
@@ -377,7 +380,29 @@ export default function InventoryMovePage() {
                     className="flex-1 text-center rounded-xl py-2.5 text-white text-lg font-bold outline-none" style={INPUT} />
                   <StepBtn onClick={() => setQty((q) => Math.min(sel.qty, q + 1))}>+</StepBtn>
                 </div>
-                <button onClick={() => setStep("to")}
+                <button onClick={async () => {
+                  setStep("to");
+                  setSkuLocs([]); setSkuLocsLoading(true);
+                  try {
+                    const rows = await wmsList("inventory/detail", {
+                      warehouseCode: WH, customerCode: sel.customerCode, productSku: sel.productSku,
+                    });
+                    const fromNorm = normLoc(fromLoc?.locationCode ?? "");
+                    const seen = new Map<string, { loc: string; qty: number; lotNo: string; condition: string }>();
+                    for (const r of rows) {
+                      const loc = buildLocCode(r) || String(r.locationCode ?? "");
+                      if (!loc || normLoc(loc) === fromNorm) continue;
+                      const key = `${loc}|${String(r.lotNo ?? "")}|${String(r.itemCondition ?? "")}`;
+                      if (seen.has(key)) {
+                        seen.get(key)!.qty += Number(r.qty ?? r.quantity ?? r.stockQty ?? 0);
+                      } else {
+                        seen.set(key, { loc, qty: Number(r.qty ?? r.quantity ?? r.stockQty ?? 0), lotNo: String(r.lotNo ?? ""), condition: String(r.itemCondition ?? "GOOD") });
+                      }
+                    }
+                    setSkuLocs([...seen.values()].filter(x => x.qty > 0).sort((a, b) => a.loc.localeCompare(b.loc)));
+                  } catch { /* silent */ }
+                  setSkuLocsLoading(false);
+                }}
                   className="mt-3 w-full rounded-xl py-3 font-semibold text-white flex items-center justify-center gap-2" style={{ background: "#2563eb" }}>
                   Next: scan TO location <ArrowRight className="w-5 h-5" />
                 </button>
@@ -409,6 +434,36 @@ export default function InventoryMovePage() {
               loading={toLoading || moving} btn={moving ? "Moving…" : "Confirm move"} confirm
             />
             {toError && <ErrorBox msg={toError} />}
+
+            {/* ── 해당 SKU 현재 재고 위치 ── */}
+            <div className="rounded-2xl p-4" style={GLASS}>
+              <div className="flex items-center gap-2 mb-3">
+                <Boxes className="w-4 h-4 text-slate-400" />
+                <span className="text-xs font-semibold text-slate-400">
+                  {sel.productSku} · 현재 재고 위치
+                </span>
+              </div>
+              {skuLocsLoading ? (
+                <div className="flex items-center gap-2 py-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                  <span className="text-xs text-slate-500">조회 중…</span>
+                </div>
+              ) : skuLocs.length === 0 ? (
+                <p className="text-xs text-slate-500 py-1">다른 로케이션에 재고 없음</p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {skuLocs.map((x, i) => (
+                    <div key={i} className="flex items-center gap-2 rounded-lg px-3 py-2"
+                      style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                      <span className="font-mono text-sm text-white flex-1 truncate">{x.loc}</span>
+                      <span className="text-sm font-bold text-blue-300 flex-shrink-0">{x.qty}</span>
+                      {x.lotNo && <span className="text-[10px] text-slate-500 flex-shrink-0">LOT {x.lotNo}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
