@@ -384,16 +384,35 @@ export default function InventoryMovePage() {
                   setStep("to");
                   setSkuLocs([]); setSkuLocsLoading(true);
                   try {
-                    const rows = await wmsList("inventory/detail", {
-                      warehouseCode: WH, customerCode: sel.customerCode, productSku: sel.productSku,
-                    });
+                    const [rows, locMaster] = await Promise.all([
+                      wmsList("inventory/detail", {
+                        warehouseCode: WH, customerCode: sel.customerCode, productSku: sel.productSku,
+                      }),
+                      fetch("/api/wms/warehouse/location/list", {
+                        method: "POST", headers: authHeaders(),
+                        body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: WH }),
+                      }).then(r => r.json()).catch(() => ({})),
+                    ]);
+                    // Build occupancy lookup: normLoc(locationCode) → occupancyInfo
+                    const occMap = new Map<string, string>();
+                    const locArr: Record<string, unknown>[] =
+                      Array.isArray(locMaster?.data?.list) ? locMaster.data.list :
+                      Array.isArray(locMaster?.data) ? locMaster.data : [];
+                    for (const l of locArr) {
+                      const occ = String(l.occupancyInfo ?? "").trim();
+                      if (!occ) continue;
+                      const lc = String(l.locationCode ?? l.location ?? "");
+                      if (lc) occMap.set(normLoc(lc), occ);
+                    }
+
                     const fromNorm = normLoc(fromLoc?.locationCode ?? "");
                     const seen = new Map<string, { loc: string; qty: number; lotNo: string; condition: string; occupancy: string }>();
                     for (const r of rows) {
                       const loc = buildLocCode(r) || String(r.locationCode ?? "");
                       if (!loc || normLoc(loc) === fromNorm) continue;
                       const key = `${loc}|${String(r.lotNo ?? "")}|${String(r.itemCondition ?? "")}`;
-                      const occ = String(r.occupancyInfo ?? r.occupancy ?? r.occupancyType ?? r.storageType ?? "");
+                      const occ = String(r.occupancyInfo ?? r.occupancy ?? r.occupancyType ?? r.storageType ?? "")
+                        || occMap.get(normLoc(loc)) || "";
                       if (seen.has(key)) {
                         seen.get(key)!.qty += Number(r.qty ?? r.quantity ?? r.stockQty ?? 0);
                       } else {
