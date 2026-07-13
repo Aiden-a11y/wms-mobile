@@ -114,7 +114,7 @@ export default function InventoryMovePage() {
   const [toError, setToError] = useState("");
   const [moving, setMoving] = useState(false);
 
-  const [skuLocs, setSkuLocs] = useState<{ loc: string; qty: number; lotNo: string; condition: string }[]>([]);
+  const [skuLocs, setSkuLocs] = useState<{ loc: string; qty: number; lotNo: string; condition: string; occupancy: string }[]>([]);
   const [skuLocsLoading, setSkuLocsLoading] = useState(false);
 
   const [result, setResult] = useState<{ from: string; to: string; sku: string; qty: number } | null>(null);
@@ -388,15 +388,16 @@ export default function InventoryMovePage() {
                       warehouseCode: WH, customerCode: sel.customerCode, productSku: sel.productSku,
                     });
                     const fromNorm = normLoc(fromLoc?.locationCode ?? "");
-                    const seen = new Map<string, { loc: string; qty: number; lotNo: string; condition: string }>();
+                    const seen = new Map<string, { loc: string; qty: number; lotNo: string; condition: string; occupancy: string }>();
                     for (const r of rows) {
                       const loc = buildLocCode(r) || String(r.locationCode ?? "");
                       if (!loc || normLoc(loc) === fromNorm) continue;
                       const key = `${loc}|${String(r.lotNo ?? "")}|${String(r.itemCondition ?? "")}`;
+                      const occ = String(r.occupancyInfo ?? r.occupancy ?? r.occupancyType ?? r.storageType ?? "");
                       if (seen.has(key)) {
                         seen.get(key)!.qty += Number(r.qty ?? r.quantity ?? r.stockQty ?? 0);
                       } else {
-                        seen.set(key, { loc, qty: Number(r.qty ?? r.quantity ?? r.stockQty ?? 0), lotNo: String(r.lotNo ?? ""), condition: String(r.itemCondition ?? "GOOD") });
+                        seen.set(key, { loc, qty: Number(r.qty ?? r.quantity ?? r.stockQty ?? 0), lotNo: String(r.lotNo ?? ""), condition: String(r.itemCondition ?? "GOOD"), occupancy: occ });
                       }
                     }
                     setSkuLocs([...seen.values()].filter(x => x.qty > 0).sort((a, b) => a.loc.localeCompare(b.loc)));
@@ -452,15 +453,31 @@ export default function InventoryMovePage() {
                 <p className="text-xs text-slate-500 py-1">다른 로케이션에 재고 없음</p>
               ) : (
                 <div className="flex flex-col gap-1.5">
-                  {skuLocs.map((x, i) => (
-                    <div key={i} className="flex items-center gap-2 rounded-lg px-3 py-2"
-                      style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                      <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                      <span className="font-mono text-sm text-white flex-1 truncate">{x.loc}</span>
-                      <span className="text-sm font-bold text-blue-300 flex-shrink-0">{x.qty}</span>
-                      {x.lotNo && <span className="text-[10px] text-slate-500 flex-shrink-0">LOT {x.lotNo}</span>}
-                    </div>
-                  ))}
+                  {skuLocs.map((x, i) => {
+                    const occ = x.occupancy.toUpperCase();
+                    const isPick = occ.includes("PICK");
+                    const isPallet = occ.includes("PALLET") || occ.includes("STOR") || occ.includes("RESERVE");
+                    const occLabel = isPick ? "SHELF" : isPallet ? "PALLET" : x.occupancy ? x.occupancy : null;
+                    const occStyle = isPick
+                      ? { background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid rgba(52,211,153,0.3)" }
+                      : isPallet
+                      ? { background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }
+                      : { background: "rgba(255,255,255,0.08)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.12)" };
+                    return (
+                      <div key={i} className="flex items-center gap-2 rounded-lg px-3 py-2"
+                        style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                        <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                        <span className="font-mono text-sm text-white flex-1 truncate">{x.loc}</span>
+                        {occLabel && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={occStyle}>
+                            {occLabel}
+                          </span>
+                        )}
+                        <span className="text-sm font-bold text-blue-300 flex-shrink-0">{x.qty}</span>
+                        {x.lotNo && <span className="text-[10px] text-slate-500 flex-shrink-0">LOT {x.lotNo}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
