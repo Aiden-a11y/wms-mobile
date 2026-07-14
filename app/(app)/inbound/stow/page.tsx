@@ -175,7 +175,7 @@ function StowFlowInner() {
   const [assignError, setAssignError] = useState("");
 
   // Inventory locations for this SKU
-  interface InvLocItem { locationCode: string; qty: number; locTypeLabel: string; locType: "picking" | "storage" | "unknown" }
+  interface InvLocItem { locationCode: string; qty: number; locTypeLabel: string; locType: "shelf" | "pallet" | "unknown" }
   const [invLocs, setInvLocs] = useState<InvLocItem[] | null>(null);
   const [invLocsLoading, setInvLocsLoading] = useState(false);
 
@@ -255,20 +255,42 @@ function StowFlowInner() {
 
   async function fetchInvLocs(warehouseCode: string, customerCode: string, productSku: string) {
     setInvLocsLoading(true);
+    const normLoc = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
     try {
-      const r = await fetch("/api/wms/inventory/detail", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ warehouseCode, customerCode, productSku }),
-      });
-      const j = await r.json().catch(() => null);
-      const dataField = j?.data;
+      const [invRes, locResRaw] = await Promise.all([
+        fetch("/api/wms/inventory/detail", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+        }),
+        fetch("/api/wms/warehouse/location/list", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode }),
+        }).catch(() => null),
+      ]);
+
+      const invJson = await invRes.json().catch(() => null);
+      const locJson = locResRaw ? await locResRaw.json().catch(() => null) : null;
+
+      // Build occupancy lookup from location/list
+      const occMap = new Map<string, string>();
+      const locArr: Record<string, unknown>[] =
+        Array.isArray(locJson?.data?.list) ? locJson.data.list :
+        Array.isArray(locJson?.data)       ? locJson.data       : [];
+      for (const l of locArr) {
+        const occ = String(l.occupancyInfo ?? "").trim();
+        if (!occ) continue;
+        const lc = String(l.locationCode ?? l.location ?? "");
+        if (lc) occMap.set(normLoc(lc), occ);
+      }
+
+      const dataField = invJson?.data;
       const items: Record<string, unknown>[] =
         Array.isArray(dataField)       ? dataField       :
         Array.isArray(dataField?.list) ? dataField.list  :
-        Array.isArray(j)               ? j               : [];
+        Array.isArray(invJson)         ? invJson         : [];
 
-      const pad = (s: string) => String(s).padStart(2, "0");
       const parsed: InvLocItem[] = items
         .map((item) => {
           const z = String(item.zoneName  ?? item.zone  ?? "");
@@ -276,21 +298,16 @@ function StowFlowInner() {
           const b = String(item.bayName   ?? item.bay   ?? "");
           const l = String(item.levelName ?? item.level ?? "");
           const p = String(item.positionName ?? item.position ?? "");
-          const locationCode = String(item.locationCode ?? [z, a, b, l, p].filter(Boolean).join("/"));
+          const locationCode = String(item.locationCode ?? [z, a, b, l, p].filter(Boolean).join("-"));
           const qty = Number(item.qty ?? item.availableQty ?? 0);
 
-          const rawType = String(
-            item.locationType ?? item.locationTypeCd ?? item.locationTypeNm ??
-            item.storageType  ?? item.storageCd      ?? item.zoneType ?? item.pickFlag ?? ""
-          ).toLowerCase();
-          const locType: "picking" | "storage" | "unknown" =
-            rawType.includes("pick") || rawType === "p" || rawType === "1" || rawType === "true" ? "picking" :
-            rawType.includes("stor") || rawType.includes("reserve") || rawType.includes("bulk") || rawType === "s" ? "storage" :
-            "unknown";
-          const locTypeLabel = locType === "picking" ? "Picking" : locType === "storage" ? "Storage" :
-            rawType ? rawType.charAt(0).toUpperCase() + rawType.slice(1) : "";
+          const rawOcc = (occMap.get(normLoc(locationCode)) ?? "").toUpperCase();
+          const isPick   = rawOcc.includes("PICK");
+          const isPallet = rawOcc.includes("PALLET") || rawOcc.includes("STOR") || rawOcc.includes("RESERVE");
+          const locType: "shelf" | "pallet" | "unknown" = isPick ? "shelf" : isPallet ? "pallet" : "unknown";
+          const locTypeLabel = isPick ? "SHELF" : isPallet ? "PALLET" : "";
 
-          return { locationCode, qty, locType, locTypeLabel };
+          return { locationCode: locationCode.replace(/\//g, "-"), qty, locType, locTypeLabel };
         })
         .filter((loc) => loc.qty > 0)
         .sort((a, b) => {
@@ -662,22 +679,24 @@ function StowFlowInner() {
               <p className="text-xs text-slate-600">No stock found in system</p>
             )}
             {invLocs && invLocs.length > 0 && (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {invLocs.map((loc, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-slate-300 flex-1">{loc.locationCode}</span>
-                    {loc.locTypeLabel && (
-                      <span className="text-xs font-semibold px-1.5 py-0.5 rounded-md flex-shrink-0"
-                        style={loc.locType === "picking"
-                          ? { background: "rgba(59,130,246,0.15)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.3)" }
-                          : loc.locType === "storage"
-                          ? { background: "rgba(139,92,246,0.15)", color: "#c4b5fd", border: "1px solid rgba(139,92,246,0.3)" }
+                    <span className="font-mono text-xs text-slate-300 flex-1 truncate">{loc.locationCode}</span>
+                    {loc.locTypeLabel ? (
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-md flex-shrink-0"
+                        style={loc.locType === "shelf"
+                          ? { background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid rgba(52,211,153,0.3)" }
+                          : loc.locType === "pallet"
+                          ? { background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }
                           : { background: "rgba(255,255,255,0.06)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.1)" }
                         }>
                         {loc.locTypeLabel}
                       </span>
+                    ) : (
+                      <span className="w-14 flex-shrink-0" />
                     )}
-                    <span className="text-xs font-bold text-slate-400 flex-shrink-0">×{loc.qty}</span>
+                    <span className="text-sm font-bold text-white flex-shrink-0 w-12 text-right">×{loc.qty}</span>
                   </div>
                 ))}
               </div>
