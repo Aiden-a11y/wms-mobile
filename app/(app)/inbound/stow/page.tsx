@@ -175,7 +175,14 @@ function StowFlowInner() {
   const [assignError, setAssignError] = useState("");
 
   // Inventory locations for this SKU
-  interface InvLocItem { locationCode: string; qty: number; locTypeLabel: string; locType: "shelf" | "pallet" | "unknown" }
+  interface InvLocItem {
+    locationCode: string;
+    qty: number;
+    lotNo: string;
+    expDate: string;
+    locTypeLabel: string;
+    locType: "shelf" | "pallet" | "unknown";
+  }
   const [invLocs, setInvLocs] = useState<InvLocItem[] | null>(null);
   const [invLocsLoading, setInvLocsLoading] = useState(false);
 
@@ -256,34 +263,33 @@ function StowFlowInner() {
   async function fetchInvLocs(warehouseCode: string, customerCode: string, productSku: string) {
     setInvLocsLoading(true);
     const normLoc = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
+
+    const getOcc = async (locCode: string): Promise<string> => {
+      try {
+        const r = await fetch("/api/wms/warehouse/location/list", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ page: 1, pageSize: 20, warehouseCode, search: locCode }),
+        });
+        const j = await r.json().catch(() => null);
+        const rows: Record<string, unknown>[] =
+          Array.isArray(j?.data?.list) ? j.data.list :
+          Array.isArray(j?.data)       ? j.data       :
+          Array.isArray(j)             ? j             : [];
+        const match = rows.find((row) =>
+          normLoc(String(row.locationCode ?? row.location ?? "")) === normLoc(locCode)
+        );
+        return match ? String(match.occupancyInfo ?? "").trim() : "";
+      } catch { return ""; }
+    };
+
     try {
-      const [invRes, locResRaw] = await Promise.all([
-        fetch("/api/wms/inventory/detail", {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ warehouseCode, customerCode, productSku }),
-        }),
-        fetch("/api/wms/warehouse/location/list", {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode }),
-        }).catch(() => null),
-      ]);
-
+      const invRes = await fetch("/api/wms/inventory/detail", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ warehouseCode, customerCode, productSku }),
+      });
       const invJson = await invRes.json().catch(() => null);
-      const locJson = locResRaw ? await locResRaw.json().catch(() => null) : null;
-
-      // Build occupancy lookup from location/list
-      const occMap = new Map<string, string>();
-      const locArr: Record<string, unknown>[] =
-        Array.isArray(locJson?.data?.list) ? locJson.data.list :
-        Array.isArray(locJson?.data)       ? locJson.data       : [];
-      for (const l of locArr) {
-        const occ = String(l.occupancyInfo ?? "").trim();
-        if (!occ) continue;
-        const lc = String(l.locationCode ?? l.location ?? "");
-        if (lc) occMap.set(normLoc(lc), occ);
-      }
 
       const dataField = invJson?.data;
       const items: Record<string, unknown>[] =
@@ -291,7 +297,22 @@ function StowFlowInner() {
         Array.isArray(dataField?.list) ? dataField.list  :
         Array.isArray(invJson)         ? invJson         : [];
 
-      const parsed: InvLocItem[] = items
+      const withQty = items.filter((item) => Number(item.qty ?? item.availableQty ?? 0) > 0);
+
+      // Per-location occupancy lookup (parallel, one search per unique location)
+      const locCodes = withQty.map((item) => {
+        const z = String(item.zoneName  ?? item.zone  ?? "");
+        const a = String(item.aisleName ?? item.aisle ?? "");
+        const b = String(item.bayName   ?? item.bay   ?? "");
+        const l = String(item.levelName ?? item.level ?? "");
+        const p = String(item.positionName ?? item.position ?? "");
+        return String(item.locationCode ?? [z, a, b, l, p].filter(Boolean).join("-"));
+      });
+      const uniqueCodes = [...new Set(locCodes)];
+      const occResults = await Promise.all(uniqueCodes.map((lc) => getOcc(lc)));
+      const occMap = new Map(uniqueCodes.map((lc, i) => [normLoc(lc), occResults[i]]));
+
+      const parsed: InvLocItem[] = withQty
         .map((item) => {
           const z = String(item.zoneName  ?? item.zone  ?? "");
           const a = String(item.aisleName ?? item.aisle ?? "");
@@ -299,7 +320,9 @@ function StowFlowInner() {
           const l = String(item.levelName ?? item.level ?? "");
           const p = String(item.positionName ?? item.position ?? "");
           const locationCode = String(item.locationCode ?? [z, a, b, l, p].filter(Boolean).join("-"));
-          const qty = Number(item.qty ?? item.availableQty ?? 0);
+          const qty     = Number(item.qty ?? item.availableQty ?? 0);
+          const lotNo   = String(item.lotNo ?? item.lot ?? "");
+          const expDate = String(item.expireDate ?? item.expiryDate ?? item.expDate ?? "").slice(0, 10);
 
           const rawOcc = (occMap.get(normLoc(locationCode)) ?? "").toUpperCase();
           const isPick   = rawOcc.includes("PICK");
@@ -307,9 +330,8 @@ function StowFlowInner() {
           const locType: "shelf" | "pallet" | "unknown" = isPick ? "shelf" : isPallet ? "pallet" : "unknown";
           const locTypeLabel = isPick ? "SHELF" : isPallet ? "PALLET" : "";
 
-          return { locationCode: locationCode.replace(/\//g, "-"), qty, locType, locTypeLabel };
+          return { locationCode: locationCode.replace(/\//g, "-"), qty, lotNo, expDate, locType, locTypeLabel };
         })
-        .filter((loc) => loc.qty > 0)
         .sort((a, b) => {
           const n = (s: string) => parseInt(s.replace(/\D/g, "") || "0", 10);
           const [az, aa, ab] = a.locationCode.split(/[/\-]/).map(n);
@@ -679,24 +701,33 @@ function StowFlowInner() {
               <p className="text-xs text-slate-600">No stock found in system</p>
             )}
             {invLocs && invLocs.length > 0 && (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {invLocs.map((loc, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-slate-300 flex-1 truncate">{loc.locationCode}</span>
-                    {loc.locTypeLabel ? (
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-md flex-shrink-0"
-                        style={loc.locType === "shelf"
-                          ? { background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid rgba(52,211,153,0.3)" }
-                          : loc.locType === "pallet"
-                          ? { background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }
-                          : { background: "rgba(255,255,255,0.06)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.1)" }
-                        }>
-                        {loc.locTypeLabel}
-                      </span>
-                    ) : (
-                      <span className="w-14 flex-shrink-0" />
+                  <div key={i} className="rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    {/* Row 1: location + badge + qty */}
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                      <span className="font-mono text-xs text-slate-200 flex-1 truncate">{loc.locationCode}</span>
+                      {loc.locTypeLabel && (
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-md flex-shrink-0"
+                          style={loc.locType === "shelf"
+                            ? { background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid rgba(52,211,153,0.3)" }
+                            : loc.locType === "pallet"
+                            ? { background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }
+                            : { background: "rgba(255,255,255,0.06)", color: "#94a3b8", border: "1px solid rgba(255,255,255,0.1)" }
+                          }>
+                          {loc.locTypeLabel}
+                        </span>
+                      )}
+                      <span className="text-sm font-bold text-white flex-shrink-0">{loc.qty} EA</span>
+                    </div>
+                    {/* Row 2: LOT / EXP */}
+                    {(loc.lotNo || loc.expDate) && (
+                      <div className="flex gap-3 mt-1.5 pl-5">
+                        {loc.lotNo  && <span className="text-xs text-slate-500">LOT <span className="text-slate-400 font-mono">{loc.lotNo}</span></span>}
+                        {loc.expDate && <span className="text-xs text-slate-500">EXP <span className="text-slate-400 font-mono">{loc.expDate}</span></span>}
+                      </div>
                     )}
-                    <span className="text-sm font-bold text-white flex-shrink-0 w-12 text-right">×{loc.qty}</span>
                   </div>
                 ))}
               </div>
