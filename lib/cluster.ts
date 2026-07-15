@@ -33,6 +33,7 @@ export interface Cluster {
   type: string;        // "b2c"
   warehouseCode: string;
   createdAt: string;
+  createdBy?: string;
 }
 
 // ── 25-color palette for bin tiles ───────────────────────────────────────────

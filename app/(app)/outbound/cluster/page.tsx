@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck } from "lucide-react";
 import { authHeaders } from "@/lib/api";
+import { getAuth } from "@/lib/auth";
 import {
   buildClusterPickList, saveCluster, saveLocationGroups,
   listActiveClusterIds, getCluster,
@@ -102,7 +103,9 @@ export default function ClusterPage() {
         setBuilding(false);
         return;
       }
-      const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString() };
+      const user = getAuth();
+      const createdBy = user?.name ?? user?.userId ?? "unknown";
+      const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString(), createdBy };
       saveCluster(cluster);
       saveLocationGroups(id, groups);
       router.push(`/outbound/cluster/${id}`);
@@ -186,7 +189,10 @@ export default function ClusterPage() {
                       )}
                       <p className="text-sm font-semibold text-white">{c.bins.length} bins · {c.locationGroups.length} locations</p>
                     </div>
-                    <p className="text-xs text-slate-500">{new Date(c.createdAt).toLocaleString()}</p>
+                    <p className="text-xs text-slate-500">
+                      {new Date(c.createdAt).toLocaleString()}
+                      {c.createdBy && <span className="ml-2 text-blue-400 font-medium">· {c.createdBy}</span>}
+                    </p>
                   </div>
                   <span className="text-slate-500 text-lg flex-shrink-0">›</span>
                 </button>
@@ -214,7 +220,10 @@ export default function ClusterPage() {
                 <PackageCheck className="w-4 h-4 text-amber-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white">{c.bins.length} orders</p>
-                  <p className="text-xs text-slate-500">{new Date(c.createdAt).toLocaleString()}</p>
+                  <p className="text-xs text-slate-500">
+                    {new Date(c.createdAt).toLocaleString()}
+                    {c.createdBy && <span className="ml-2 text-amber-400 font-medium">· {c.createdBy}</span>}
+                  </p>
                 </div>
                 <span className="text-slate-500 text-lg">›</span>
               </button>
