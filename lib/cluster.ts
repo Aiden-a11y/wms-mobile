@@ -33,7 +33,7 @@ export interface Cluster {
   type: string;        // "b2c"
   warehouseCode: string;
   createdAt: string;
-  createdBy?: string;
+  pickedBy?: string;
 }
 
 // ── 25-color palette for bin tiles ───────────────────────────────────────────
@@ -74,6 +74,21 @@ export function binColor(binNo: number) {
 
 export function saveCluster(cluster: Cluster) {
   localStorage.setItem(`cluster_${cluster.id}`, JSON.stringify(cluster));
+}
+
+export function setPickedBy(id: string, name: string) {
+  const c = getCluster(id);
+  if (c && !c.pickedBy) saveCluster({ ...c, pickedBy: name });
+}
+
+// B2C clusters live in Redis, so we track their picker locally
+export function setB2cPickedBy(id: string, name: string) {
+  if (!localStorage.getItem(`b2cpicker_${id}`))
+    localStorage.setItem(`b2cpicker_${id}`, name);
+}
+
+export function getB2cPickedBy(id: string): string {
+  return localStorage.getItem(`b2cpicker_${id}`) ?? "";
 }
 
 export function getCluster(id: string): Cluster | null {

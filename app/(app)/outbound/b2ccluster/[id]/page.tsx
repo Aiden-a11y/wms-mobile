@@ -43,6 +43,11 @@ export default function B2CClusterOverviewPage() {
 
   useEffect(() => {
     setDoneSet(getDoneSet(id));
+    import("@/lib/auth").then(({ getAuth }) => {
+      const user = getAuth();
+      const name = user?.name ?? user?.userId ?? "";
+      if (name) import("@/lib/cluster").then(({ setB2cPickedBy }) => setB2cPickedBy(id, name));
+    });
   }, [id]);
 
   const nextLocIdx = cluster

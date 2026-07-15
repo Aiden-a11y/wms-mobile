@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, RefreshCw, AlertCircle, Loader2, PackageCheck } from "lucide-react";
 import { authHeaders } from "@/lib/api";
-import { getAuth } from "@/lib/auth";
+import { getB2cPickedBy } from "@/lib/cluster";
 import {
   buildClusterPickList, saveCluster, saveLocationGroups,
   listActiveClusterIds, getCluster,
@@ -103,9 +103,7 @@ export default function ClusterPage() {
         setBuilding(false);
         return;
       }
-      const user = getAuth();
-      const createdBy = user?.name ?? user?.userId ?? "unknown";
-      const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString(), createdBy };
+      const cluster: Cluster = { id, bins, type: "b2c", warehouseCode, createdAt: new Date().toISOString() };
       saveCluster(cluster);
       saveLocationGroups(id, groups);
       router.push(`/outbound/cluster/${id}`);
@@ -191,7 +189,7 @@ export default function ClusterPage() {
                     </div>
                     <p className="text-xs text-slate-500">
                       {new Date(c.createdAt).toLocaleString()}
-                      {c.createdBy && <span className="ml-2 text-blue-400 font-medium">· {c.createdBy}</span>}
+                      {(() => { const p = getB2cPickedBy(c.id); return p ? <span className="ml-2 text-blue-400 font-medium">· {p}</span> : null; })()}
                     </p>
                   </div>
                   <span className="text-slate-500 text-lg flex-shrink-0">›</span>
@@ -222,7 +220,7 @@ export default function ClusterPage() {
                   <p className="text-sm font-semibold text-white">{c.bins.length} orders</p>
                   <p className="text-xs text-slate-500">
                     {new Date(c.createdAt).toLocaleString()}
-                    {c.createdBy && <span className="ml-2 text-amber-400 font-medium">· {c.createdBy}</span>}
+                    {c.pickedBy && <span className="ml-2 text-amber-400 font-medium">· {c.pickedBy}</span>}
                   </p>
                 </div>
                 <span className="text-slate-500 text-lg">›</span>

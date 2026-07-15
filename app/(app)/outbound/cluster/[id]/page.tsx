@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { ChevronLeft, MapPin, CheckCircle2, Circle, PackageCheck } from "lucide-react";
-import { getCluster, getLocationGroups, getDoneSet, binColor, type LocationGroup } from "@/lib/cluster";
+import { getCluster, getLocationGroups, getDoneSet, setPickedBy, binColor, type LocationGroup } from "@/lib/cluster";
+import { getAuth } from "@/lib/auth";
 
 const DARK = { background: "radial-gradient(ellipse at 50% 0%, #1e2d4a 0%, #080d1a 60%)" };
 const HDR_BORDER = { borderBottom: "1px solid rgba(255,255,255,0.08)" };
@@ -20,7 +21,12 @@ export default function ClusterOverviewPage() {
   const groups = getLocationGroups(id) ?? [];
   const [doneSet, setDoneSet] = useState<Set<number>>(new Set());
 
-  useEffect(() => { setDoneSet(getDoneSet(id)); }, [id]);
+  useEffect(() => {
+    setDoneSet(getDoneSet(id));
+    const user = getAuth();
+    const name = user?.name ?? user?.userId ?? "";
+    if (name) setPickedBy(id, name);
+  }, [id]);
 
   if (!cluster) {
     return (
