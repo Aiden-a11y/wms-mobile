@@ -684,7 +684,7 @@ function StowFlowInner() {
             </div>
             <div>
               <p className="text-base font-bold text-white">
-                {blockReason.type === "lot_mismatch" ? "LOT / EXP 불일치" : "로케이션 사용중"}
+                {blockReason.type === "lot_mismatch" ? "LOT / EXP Mismatch" : "Location Occupied"}
               </p>
               <p className="text-xs text-slate-500 font-mono">{blockReason.locationCode}</p>
             </div>
@@ -695,7 +695,7 @@ function StowFlowInner() {
             <div className="space-y-2.5">
               <div className="rounded-2xl p-3.5 space-y-1.5"
                 style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                <p className="text-xs font-semibold text-red-400 mb-2">기존 재고</p>
+                <p className="text-xs font-semibold text-red-400 mb-2">Existing Stock</p>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-400">LOT</span>
                   <span className="font-mono font-bold text-white">{blockReason.existingLot || "—"}</span>
@@ -705,13 +705,13 @@ function StowFlowInner() {
                   <span className="font-mono font-bold text-white">{blockReason.existingExp || "—"}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">수량</span>
+                  <span className="text-slate-400">Qty</span>
                   <span className="font-mono font-bold text-white">{blockReason.existingQty ?? "—"} EA</span>
                 </div>
               </div>
               <div className="rounded-2xl p-3.5 space-y-1.5"
                 style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)" }}>
-                <p className="text-xs font-semibold text-blue-400 mb-2">입고 태그</p>
+                <p className="text-xs font-semibold text-blue-400 mb-2">This Tag</p>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-400">LOT</span>
                   <span className="font-mono font-bold text-white">{blockReason.myLot || "—"}</span>
@@ -725,9 +725,9 @@ function StowFlowInner() {
           ) : (
             <div className="rounded-2xl p-4"
               style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
-              <p className="text-sm text-slate-300">해당 로케이션에 이미 재고가 있습니다.</p>
+              <p className="text-sm text-slate-300">This location already has stock from another SKU or customer.</p>
               {blockReason.existingQty != null && (
-                <p className="text-xs text-slate-500 mt-1">현재 수량: <span className="font-mono text-white">{blockReason.existingQty} EA</span></p>
+                <p className="text-xs text-slate-500 mt-1">Current qty: <span className="font-mono text-white">{blockReason.existingQty} EA</span></p>
               )}
             </div>
           )}
@@ -736,7 +736,7 @@ function StowFlowInner() {
             onClick={() => setBlockReason(null)}
             className="w-full h-12 rounded-2xl text-sm font-bold text-white active:scale-[0.98] transition-all"
             style={{ background: "#dc2626" }}>
-            다른 로케이션 스캔
+            Scan a Different Location
           </button>
         </div>
       </div>
