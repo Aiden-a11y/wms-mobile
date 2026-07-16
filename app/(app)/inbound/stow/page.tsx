@@ -117,10 +117,11 @@ async function checkLocationOccupied(
     });
 
     if (hit) {
+      const normDate = (s: string) => s.replace(/\D/g, "").slice(0, 8);
       const hitLot = String(hit.lotNo ?? hit.lot ?? "").trim();
-      const hitExp = String(hit.expireDate ?? hit.expiryDate ?? hit.expDate ?? "").slice(0, 10).trim();
+      const hitExp = normDate(String(hit.expireDate ?? hit.expiryDate ?? hit.expDate ?? ""));
       const normLot = tagLotNo.trim();
-      const normExp = tagExpireDate.slice(0, 10).trim();
+      const normExp = normDate(tagExpireDate);
       // Same SKU + same LOT + same EXP → adding to existing stock, allow
       if (hitLot === normLot && hitExp === normExp) return null;
       const qty = Number(hit.qty ?? hit.availableQty ?? 0);
