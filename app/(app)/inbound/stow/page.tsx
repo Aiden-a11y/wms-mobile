@@ -73,11 +73,16 @@ function locLabel(loc: LocationInfo): string {
     .filter(Boolean).join(" - ") || loc.locationCode;
 }
 
-/**
- * Occupancy check — 2 sequential API calls only, no background work.
- * 1. inventory/detail for tag's customerCode+SKU → catches same-customer stock
- * 2. location/list qty check → catches any customer (if API returns qty fields)
- */
+interface BlockReason {
+  type: "lot_mismatch" | "occupied";
+  locationCode: string;
+  existingLot?: string;
+  existingExp?: string;
+  existingQty?: number;
+  myLot?: string;
+  myExp?: string;
+}
+
 async function checkLocationOccupied(
   loc: LocationInfo,
   warehouseCode: string,
@@ -85,7 +90,7 @@ async function checkLocationOccupied(
   productSku: string,
   tagLotNo = "",
   tagExpireDate = "",
-): Promise<string | null> {
+): Promise<BlockReason | null> {
   const pad = (s: string) => String(s).padStart(2, "0");
   const locBarcode = [loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName]
     .map(pad).join("");
@@ -122,10 +127,16 @@ async function checkLocationOccupied(
       const hitExp = normDate(String(hit.expireDate ?? hit.expiryDate ?? hit.expDate ?? ""));
       const normLot = tagLotNo.trim();
       const normExp = normDate(tagExpireDate);
-      // Same SKU + same LOT + same EXP → adding to existing stock, allow
       if (hitLot === normLot && hitExp === normExp) return null;
-      const qty = Number(hit.qty ?? hit.availableQty ?? 0);
-      return `Location already has different lot/exp.\nExisting: LOT ${hitLot || "—"}  EXP ${hitExp || "—"}  Qty: ${qty}\nYours: LOT ${normLot || "—"}  EXP ${normExp || "—"}\nPlease scan a different location.`;
+      return {
+        type: "lot_mismatch",
+        locationCode: loc.locationCode,
+        existingLot: hitLot || undefined,
+        existingExp: hitExp || undefined,
+        existingQty: Number(hit.qty ?? hit.availableQty ?? 0),
+        myLot: normLot || undefined,
+        myExp: normExp || undefined,
+      };
     }
   } catch { /* skip to call 2 */ }
 
@@ -155,7 +166,7 @@ async function checkLocationOccupied(
 
     if (match) {
       const qty = Number(match.currentQty ?? match.locQty ?? match.qty ?? match.inventoryQty ?? -1);
-      if (qty > 0) return `Location already occupied (qty: ${qty}).\nPlease scan a different location.`;
+      if (qty > 0) return { type: "occupied", locationCode: loc.locationCode, existingQty: qty };
     }
   } catch { /* inconclusive — allow */ }
 
@@ -182,6 +193,7 @@ function StowFlowInner() {
   const [locError, setLocError] = useState("");
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState("");
+  const [blockReason, setBlockReason] = useState<BlockReason | null>(null);
 
   // Inventory locations for this SKU
   interface InvLocItem {
@@ -413,7 +425,7 @@ function StowFlowInner() {
       // ── Occupancy check (after location-search, no concurrent requests) ──
       const blocked = await checkLocationOccupied(loc, wc, tag.customerCode, tag.sku, tag.lotNo ?? "", tag.expireDate ?? "");
       if (blocked) {
-        setLocError(blocked);
+        setBlockReason(blocked);
         setLocLoading(false);
         return;
       }
@@ -654,7 +666,82 @@ function StowFlowInner() {
   }
 
   // ── Main flow ─────────────────────────────────────────────
-  return (
+  return (<>
+    {/* Block reason modal */}
+    {blockReason && (
+      <div className="fixed inset-0 z-50 flex items-end justify-center p-4"
+        style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }}
+        onClick={() => setBlockReason(null)}>
+        <div className="w-full max-w-sm rounded-3xl p-5 space-y-4"
+          style={{ background: "#0f172a", border: "1px solid rgba(239,68,68,0.4)" }}
+          onClick={(e) => e.stopPropagation()}>
+
+          {/* Header */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)" }}>
+              <AlertCircle className="w-5 h-5 text-red-400" />
+            </div>
+            <div>
+              <p className="text-base font-bold text-white">
+                {blockReason.type === "lot_mismatch" ? "LOT / EXP 불일치" : "로케이션 사용중"}
+              </p>
+              <p className="text-xs text-slate-500 font-mono">{blockReason.locationCode}</p>
+            </div>
+          </div>
+
+          {/* Detail */}
+          {blockReason.type === "lot_mismatch" ? (
+            <div className="space-y-2.5">
+              <div className="rounded-2xl p-3.5 space-y-1.5"
+                style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                <p className="text-xs font-semibold text-red-400 mb-2">기존 재고</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">LOT</span>
+                  <span className="font-mono font-bold text-white">{blockReason.existingLot || "—"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">EXP</span>
+                  <span className="font-mono font-bold text-white">{blockReason.existingExp || "—"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">수량</span>
+                  <span className="font-mono font-bold text-white">{blockReason.existingQty ?? "—"} EA</span>
+                </div>
+              </div>
+              <div className="rounded-2xl p-3.5 space-y-1.5"
+                style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)" }}>
+                <p className="text-xs font-semibold text-blue-400 mb-2">입고 태그</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">LOT</span>
+                  <span className="font-mono font-bold text-white">{blockReason.myLot || "—"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">EXP</span>
+                  <span className="font-mono font-bold text-white">{blockReason.myExp || "—"}</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl p-4"
+              style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+              <p className="text-sm text-slate-300">해당 로케이션에 이미 재고가 있습니다.</p>
+              {blockReason.existingQty != null && (
+                <p className="text-xs text-slate-500 mt-1">현재 수량: <span className="font-mono text-white">{blockReason.existingQty} EA</span></p>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={() => setBlockReason(null)}
+            className="w-full h-12 rounded-2xl text-sm font-bold text-white active:scale-[0.98] transition-all"
+            style={{ background: "#dc2626" }}>
+            다른 로케이션 스캔
+          </button>
+        </div>
+      </div>
+    )}
+
     <div className="min-h-screen flex flex-col" style={DARK}>
       <header className="px-5 py-4 flex items-center gap-3 flex-shrink-0" style={HDR_BORDER}>
         <button onClick={() => router.back()} className="p-1 text-slate-400 active:text-white">
@@ -887,7 +974,7 @@ function StowFlowInner() {
         })()}
       </main>
     </div>
-  );
+  </>);
 }
 
 export default function StowPage() {
