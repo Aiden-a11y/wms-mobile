@@ -83,6 +83,8 @@ async function checkLocationOccupied(
   warehouseCode: string,
   customerCode: string,
   productSku: string,
+  tagLotNo = "",
+  tagExpireDate = "",
 ): Promise<string | null> {
   const pad = (s: string) => String(s).padStart(2, "0");
   const locBarcode = [loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName]
@@ -115,8 +117,14 @@ async function checkLocationOccupied(
     });
 
     if (hit) {
+      const hitLot = String(hit.lotNo ?? hit.lot ?? "").trim();
+      const hitExp = String(hit.expireDate ?? hit.expiryDate ?? hit.expDate ?? "").slice(0, 10).trim();
+      const normLot = tagLotNo.trim();
+      const normExp = tagExpireDate.slice(0, 10).trim();
+      // Same SKU + same LOT + same EXP → adding to existing stock, allow
+      if (hitLot === normLot && hitExp === normExp) return null;
       const qty = Number(hit.qty ?? hit.availableQty ?? 0);
-      return `Location already occupied.\nSKU: ${String(hit.productSku ?? hit.sku ?? productSku)}  Qty: ${qty}\nPlease scan a different location.`;
+      return `Location already has different lot/exp.\nExisting: LOT ${hitLot || "—"}  EXP ${hitExp || "—"}  Qty: ${qty}\nYours: LOT ${normLot || "—"}  EXP ${normExp || "—"}\nPlease scan a different location.`;
     }
   } catch { /* skip to call 2 */ }
 
@@ -402,7 +410,7 @@ function StowFlowInner() {
       const loc: LocationInfo = { locationCode, locationId, warehouseCd: locationWarehouseCd, zoneName, aisleName, bayName, levelName, positionName };
 
       // ── Occupancy check (after location-search, no concurrent requests) ──
-      const blocked = await checkLocationOccupied(loc, wc, tag.customerCode, tag.sku);
+      const blocked = await checkLocationOccupied(loc, wc, tag.customerCode, tag.sku, tag.lotNo ?? "", tag.expireDate ?? "");
       if (blocked) {
         setLocError(blocked);
         setLocLoading(false);
