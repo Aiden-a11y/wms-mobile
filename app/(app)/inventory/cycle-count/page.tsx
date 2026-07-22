@@ -16,7 +16,7 @@ const HDR = { borderBottom: "1px solid rgba(255,255,255,0.08)" };
 const GLASS = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" };
 const INPUT_BLUE = { background: "rgba(255,255,255,0.07)", border: "2px solid rgba(59,130,246,0.5)" };
 
-type Step = "location" | "product" | "count" | "recount" | "result_ok" | "result_mismatch";
+type Step = "location" | "product" | "lot_select" | "count" | "recount" | "result_ok" | "result_mismatch";
 
 interface LocInfo {
   locationCode: string;
@@ -78,7 +78,7 @@ async function fetchCustomers(): Promise<string[]> {
 async function fetchInventoryAtLocation(
   locInfo: LocInfo,
   sku: string,
-): Promise<InventoryItem | null> {
+): Promise<InventoryItem[]> {
   const fromKey = locKey({
     zone: locInfo.zone, aisle: locInfo.aisle,
     bay: locInfo.bay, level: locInfo.level, position: locInfo.position,
@@ -91,12 +91,8 @@ async function fetchInventoryAtLocation(
   const custs = await fetchCustomers();
   const targets = custs.length ? custs : [""];
 
-  let totalQty = 0;
-  let customerCode = "";
-  let productName = "";
-  let lot = "";
-  let expireDate = "";
-  let found = false;
+  // Group by lot+expireDate — each LOT is a separate countable item
+  const lotMap = new Map<string, InventoryItem>();
 
   for (const c of targets) {
     try {
@@ -109,20 +105,27 @@ async function fetchInventoryAtLocation(
       for (const r of rows) {
         const qty = Number(r.qty ?? r.quantity ?? r.stockQty ?? r.onHandQty ?? 0);
         if (qty <= 0) continue;
-        totalQty += qty;
-        if (!found) {
-          found = true;
-          customerCode = String(r.customerCode ?? c ?? "");
-          productName = String(r.productName ?? r.itemName ?? "");
-          lot = String(r.lotNo ?? r.lot ?? "");
-          expireDate = String(r.expireDate ?? r.expiryDate ?? "");
+        const lot = String(r.lotNo ?? r.lot ?? "");
+        const expireDate = String(r.expireDate ?? r.expiryDate ?? "");
+        const key = `${lot}__${expireDate}`;
+        const existing = lotMap.get(key);
+        if (existing) {
+          existing.systemQty += qty;
+        } else {
+          lotMap.set(key, {
+            sku,
+            productName: String(r.productName ?? r.itemName ?? ""),
+            systemQty: qty,
+            customerCode: String(r.customerCode ?? c ?? ""),
+            lot,
+            expireDate,
+          });
         }
       }
     } catch { /* silent */ }
   }
 
-  if (!found) return null;
-  return { sku, productName, systemQty: totalQty, customerCode, lot, expireDate };
+  return Array.from(lotMap.values());
 }
 
 /* ── component ───────────────────────────────────────────────── */
@@ -143,6 +146,7 @@ export default function CycleCountPage() {
   const [skuLoading, setSkuLoading] = useState(false);
   const [skuError, setSkuError] = useState("");
   const [currentItem, setCurrentItem] = useState<InventoryItem | null>(null);
+  const [lotItems, setLotItems] = useState<InventoryItem[]>([]);
 
   /* count */
   const [countInput, setCountInput] = useState("");
@@ -200,19 +204,30 @@ export default function CycleCountPage() {
     if (!sku || !locInfo) return;
     setSkuLoading(true); setSkuError("");
     try {
-      const item = await fetchInventoryAtLocation(locInfo, sku);
-      if (!item) {
+      const items = await fetchInventoryAtLocation(locInfo, sku);
+      if (items.length === 0) {
         setSkuError(`SKU "${sku}" not found at ${locInfo.locationCode}.`);
         setSkuLoading(false); return;
       }
-      setCurrentItem(item);
       setSkuScan("");
       setCountInput("");
-      setStep("count");
+      if (items.length === 1) {
+        setCurrentItem(items[0]);
+        setStep("count");
+      } else {
+        setLotItems(items);
+        setStep("lot_select");
+      }
     } catch (e) {
       setSkuError(e instanceof Error ? e.message : "Lookup failed");
     }
     setSkuLoading(false);
+  }
+
+  function selectLot(item: InventoryItem) {
+    setCurrentItem(item);
+    setCountInput("");
+    setStep("count");
   }
 
   /* ── Add item not in system (ghost item, system_qty=0) ── */
@@ -289,7 +304,7 @@ export default function CycleCountPage() {
 
   /* ── Navigation ── */
   function nextItem() {
-    setSkuScan(""); setSkuError(""); setCurrentItem(null);
+    setSkuScan(""); setSkuError(""); setCurrentItem(null); setLotItems([]);
     setCountInput(""); setRecountInput("");
     setStep("product");
   }
@@ -302,7 +317,8 @@ export default function CycleCountPage() {
   function back() {
     if (step === "location") router.back();
     else if (step === "product") nextLocation();
-    else if (step === "count") { setStep("product"); setCurrentItem(null); setSkuScan(""); }
+    else if (step === "lot_select") { setStep("product"); setLotItems([]); setSkuScan(""); }
+    else if (step === "count") { setLotItems([]); setStep("product"); setCurrentItem(null); setSkuScan(""); }
     else if (step === "recount") { setCountInput(""); setStep("count"); }
     else if (step === "result_ok" || step === "result_mismatch") nextItem();
   }
@@ -310,6 +326,7 @@ export default function CycleCountPage() {
   const stepLabel: Record<Step, string> = {
     location: "Step 1 · Scan location",
     product: "Step 2 · Scan product",
+    lot_select: "Step 2 · Select LOT",
     count: "Step 3 · Count quantity",
     recount: "Step 3 · Count again",
     result_ok: "Match!",
@@ -446,6 +463,38 @@ export default function CycleCountPage() {
               </div>
             )}
           </>
+        )}
+
+        {/* ── STEP 2b: LOT selection ── */}
+        {step === "lot_select" && (
+          <div className="rounded-2xl overflow-hidden" style={GLASS}>
+            <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+              <Boxes className="w-4 h-4 text-blue-300" />
+              <span className="text-sm font-semibold text-white">Select LOT to count</span>
+              <span className="ml-auto text-[11px] text-slate-500">{lotItems.length} lots</span>
+            </div>
+            {lotItems.map((item, i) => (
+              <button
+                key={`${item.lot}_${item.expireDate}_${i}`}
+                onClick={() => selectLot(item)}
+                className="w-full px-4 py-3.5 flex items-center justify-between active:opacity-70 transition-opacity"
+                style={{ borderBottom: i < lotItems.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none" }}
+              >
+                <div className="text-left">
+                  <p className="text-sm font-semibold text-white font-mono">
+                    {item.lot || <span className="text-slate-500 font-sans font-normal">No LOT</span>}
+                  </p>
+                  {item.expireDate && (
+                    <p className="text-[11px] text-slate-400 mt-0.5">EXP {item.expireDate}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">System: <span className="text-white font-bold">{item.systemQty}</span></span>
+                  <ArrowRight className="w-4 h-4 text-slate-500" />
+                </div>
+              </button>
+            ))}
+          </div>
         )}
 
         {/* ── STEP 3: Count (first attempt) ── */}
