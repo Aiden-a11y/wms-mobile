@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
     "@types/jsbarcode": "^3.11.4",
     "@upstash/redis": "^1.38.0",
     "jsbarcode": "^3.12.3",
