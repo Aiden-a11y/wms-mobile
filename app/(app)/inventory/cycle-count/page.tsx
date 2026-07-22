@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import {
   ChevronLeft, ScanLine, MapPin, Boxes,
   Loader2, AlertCircle, CheckCircle2, XCircle,
-  ArrowRight, RotateCcw, ClipboardList,
+  ArrowRight, RotateCcw, ClipboardList, PlusCircle,
 } from "lucide-react";
 import { authHeaders } from "@/lib/api";
 import { getAuth } from "@/lib/auth";
@@ -215,12 +215,27 @@ export default function CycleCountPage() {
     setSkuLoading(false);
   }
 
+  /* ── Add item not in system (ghost item, system_qty=0) ── */
+  function handleAddItem() {
+    const sku = skuScan.trim();
+    if (!sku) return;
+    setCurrentItem({ sku, productName: "", systemQty: 0, customerCode: "", lot: "", expireDate: "" });
+    setSkuError("");
+    setCountInput("");
+    setStep("count");
+  }
+
   /* ── STEP 3: first count ── */
   function handleCount() {
     const n = parseInt(countInput);
     if (isNaN(n) || n < 0) return;
     if (!currentItem) return;
-    if (n === currentItem.systemQty) {
+    const isGhost = currentItem.systemQty === 0 && currentItem.productName === "";
+    if (isGhost) {
+      // not-in-system item: save immediately (OVER if >0, OK if 0)
+      setFinalQty(n);
+      saveRecord(n, n > 0 ? "OVER" : "OK");
+    } else if (n === currentItem.systemQty) {
       setFinalQty(n);
       saveRecord(n, "OK");
     } else {
@@ -396,13 +411,35 @@ export default function CycleCountPage() {
                 {skuLoading ? "Looking up…" : "Confirm product"}
               </button>
             </div>
-            {skuError && <ErrBox msg={skuError} />}
+            {skuError && (
+              <>
+                <ErrBox msg={skuError} />
+                {skuError.includes("not found") && (
+                  <button
+                    onClick={handleAddItem}
+                    className="w-full rounded-xl py-3 font-semibold flex items-center justify-center gap-2"
+                    style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.35)" }}
+                  >
+                    <PlusCircle className="w-5 h-5 text-emerald-400" />
+                    <span className="text-emerald-300">Add Item (not in system)</span>
+                  </button>
+                )}
+              </>
+            )}
           </>
         )}
 
         {/* ── STEP 3: Count (first attempt) ── */}
         {step === "count" && (
           <>
+            {currentItem?.systemQty === 0 && currentItem?.productName === "" && (
+              <div className="rounded-xl px-4 py-3 flex gap-2.5" style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)" }}>
+                <PlusCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-emerald-300">
+                  <span className="font-semibold">New item</span> — not in system. Count what&apos;s physically here and it will be recorded as OVER for manager review.
+                </p>
+              </div>
+            )}
             <div className="rounded-2xl p-5" style={GLASS}>
               <div className="flex items-center gap-2 mb-4">
                 <Boxes className="w-5 h-5 text-blue-300" />
