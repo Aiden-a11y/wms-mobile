@@ -411,20 +411,39 @@ export default function CycleCountPage() {
                 {skuLoading ? "Looking up…" : "Confirm product"}
               </button>
             </div>
-            {skuError && (
-              <>
-                <ErrBox msg={skuError} />
-                {skuError.includes("not found") && (
-                  <button
-                    onClick={handleAddItem}
-                    className="w-full rounded-xl py-3 font-semibold flex items-center justify-center gap-2"
-                    style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.35)" }}
-                  >
-                    <PlusCircle className="w-5 h-5 text-emerald-400" />
-                    <span className="text-emerald-300">Add Item (not in system)</span>
-                  </button>
-                )}
-              </>
+            {skuError && !skuError.includes("not found") && <ErrBox msg={skuError} />}
+
+            {/* Not-found modal */}
+            {skuError.includes("not found") && (
+              <div className="fixed inset-0 z-50 flex items-end justify-center pb-8 px-5" style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}>
+                <div className="w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: "#0f1729", border: "1px solid rgba(255,255,255,0.1)" }}>
+                  <div className="px-5 pt-5 pb-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                      <p className="text-sm font-semibold text-red-300">SKU not found</p>
+                    </div>
+                    <p className="text-xs text-slate-400 font-mono break-all">{skuScan.trim()}</p>
+                    <p className="text-xs text-slate-500 mt-1">Not registered at this location in the system.</p>
+                  </div>
+                  <div className="px-5 pb-5 flex flex-col gap-2.5">
+                    <button
+                      onClick={handleAddItem}
+                      className="w-full rounded-xl py-3 font-semibold flex items-center justify-center gap-2"
+                      style={{ background: "rgba(16,185,129,0.2)", border: "1px solid rgba(16,185,129,0.4)" }}
+                    >
+                      <PlusCircle className="w-5 h-5 text-emerald-400" />
+                      <span className="text-emerald-300 text-sm">Add Item (not in system)</span>
+                    </button>
+                    <button
+                      onClick={() => { setSkuError(""); setSkuScan(""); setTimeout(() => skuRef.current?.focus(), 50); }}
+                      className="w-full rounded-xl py-3 font-semibold text-sm text-slate-400"
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </>
         )}
