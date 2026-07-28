@@ -148,6 +148,10 @@ export default function CycleCountPage() {
   const [currentItem, setCurrentItem] = useState<InventoryItem | null>(null);
   const [lotItems, setLotItems] = useState<InventoryItem[]>([]);
 
+  /* add-item (not in system) LOT/EXP inputs */
+  const [addLot, setAddLot] = useState("");
+  const [addExp, setAddExp] = useState("");
+
   /* count */
   const [countInput, setCountInput] = useState("");
   const [recountInput, setRecountInput] = useState("");
@@ -234,8 +238,17 @@ export default function CycleCountPage() {
   function handleAddItem() {
     const sku = skuScan.trim();
     if (!sku) return;
-    setCurrentItem({ sku, productName: "", systemQty: 0, customerCode: "", lot: "", expireDate: "" });
+    setCurrentItem({
+      sku,
+      productName: "",
+      systemQty: 0,
+      customerCode: "",
+      lot: addLot.trim(),
+      expireDate: addExp.trim(),
+    });
     setSkuError("");
+    setAddLot("");
+    setAddExp("");
     setCountInput("");
     setStep("count");
   }
@@ -434,14 +447,45 @@ export default function CycleCountPage() {
             {skuError.includes("not found") && (
               <div className="fixed inset-0 z-50 flex items-end justify-center pb-8 px-5" style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}>
                 <div className="w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: "#0f1729", border: "1px solid rgba(255,255,255,0.1)" }}>
-                  <div className="px-5 pt-5 pb-4">
+                  <div className="px-5 pt-5 pb-3">
                     <div className="flex items-center gap-2 mb-2">
                       <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
                       <p className="text-sm font-semibold text-red-300">SKU not found</p>
                     </div>
                     <p className="text-xs text-slate-400 font-mono break-all">{skuScan.trim()}</p>
-                    <p className="text-xs text-slate-500 mt-1">Not registered at this location in the system.</p>
+                    <p className="text-xs text-slate-500 mt-1 mb-4">Not registered at this location. Enter LOT / EXP if applicable, then add.</p>
+
+                    {/* LOT input */}
+                    <div className="mb-2.5">
+                      <label className="text-[11px] font-semibold text-slate-400 mb-1 block">LOT No. <span className="font-normal text-slate-600">(optional)</span></label>
+                      <input
+                        type="text"
+                        value={addLot}
+                        onChange={e => setAddLot(e.target.value)}
+                        placeholder="e.g. OLA, QLA"
+                        autoComplete="off"
+                        className="w-full rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder:text-slate-600 font-mono"
+                        style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)" }}
+                      />
+                    </div>
+
+                    {/* EXP input */}
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-400 mb-1 block">Expiry Date <span className="font-normal text-slate-600">(optional, YYYYMMDD)</span></label>
+                      <input
+                        type="text"
+                        value={addExp}
+                        onChange={e => setAddExp(e.target.value)}
+                        placeholder="e.g. 20280516"
+                        autoComplete="off"
+                        inputMode="numeric"
+                        maxLength={8}
+                        className="w-full rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder:text-slate-600 font-mono"
+                        style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)" }}
+                      />
+                    </div>
                   </div>
+
                   <div className="px-5 pb-5 flex flex-col gap-2.5">
                     <button
                       onClick={handleAddItem}
@@ -452,7 +496,7 @@ export default function CycleCountPage() {
                       <span className="text-emerald-300 text-sm">Add Item (not in system)</span>
                     </button>
                     <button
-                      onClick={() => { setSkuError(""); setSkuScan(""); setTimeout(() => skuRef.current?.focus(), 50); }}
+                      onClick={() => { setSkuError(""); setSkuScan(""); setAddLot(""); setAddExp(""); setTimeout(() => skuRef.current?.focus(), 50); }}
                       className="w-full rounded-xl py-3 font-semibold text-sm text-slate-400"
                       style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
                     >
