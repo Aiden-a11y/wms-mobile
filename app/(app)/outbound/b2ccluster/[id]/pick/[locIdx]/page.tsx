@@ -187,9 +187,13 @@ export default function B2CClusterPickPage() {
     } else {
       // All locations done — close cluster directly from pick page
       // (avoids relying on overview page remounting, which Next.js router cache may skip)
+      const { getAuth } = await import("@/lib/auth");
+      const u = getAuth();
+      const completedBy = u?.name || u?.userId || "";
       await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
         method: "POST",
-        headers: authHeaders(),
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ completedBy }),
       }).catch(() => {});
       localStorage.removeItem(`b2ccluster_done_${id}`);
       router.replace("/outbound/cluster");

@@ -62,9 +62,13 @@ export default function B2CClusterOverviewPage() {
     if (closing) return;
     setClosing(true);
     const { authHeaders } = await import("@/lib/api");
+    const { getAuth } = await import("@/lib/auth");
+    const u = getAuth();
+    const completedBy = u?.name || u?.userId || "";
     const res = await fetch(`/api/cluster/close?id=${encodeURIComponent(id)}`, {
       method: "POST",
-      headers: authHeaders(),
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ completedBy }),
     });
     if (res.ok) localStorage.removeItem(`b2ccluster_done_${id}`);
     router.replace("/outbound/cluster");

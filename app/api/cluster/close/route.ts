@@ -51,6 +51,8 @@ export async function POST(req: NextRequest) {
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "missing id" }, { status: 400 });
 
+  const body = await req.json().catch(() => ({})) as { completedBy?: string };
+
   const raw = await redis.get(`wms:b2ccluster:${id}`);
   if (!raw) return NextResponse.json({ error: "not found" }, { status: 404 });
 
@@ -69,6 +71,7 @@ export async function POST(req: NextRequest) {
     ...cluster,
     status: "completed",
     completedAt: new Date().toISOString(),
+    ...(body.completedBy ? { completedBy: body.completedBy } : {}),
   };
   await redis.set(`wms:b2ccluster:${id}`, updated, { ex: CLUSTER_TTL });
 
