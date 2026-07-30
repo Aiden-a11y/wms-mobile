@@ -277,7 +277,7 @@ export default function CycleCountPage() {
     if (isNaN(n) || n < 0) return;
     setFinalQty(n);
     if (!currentItem) return;
-    const status = n > currentItem.systemQty ? "OVER" : "SHORT";
+    const status = n === currentItem.systemQty ? "OK" : n > currentItem.systemQty ? "OVER" : "SHORT";
     saveRecord(n, status);
   }
 
