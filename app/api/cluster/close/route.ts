@@ -80,9 +80,23 @@ export async function POST(req: NextRequest) {
   // already at DA/FA or beyond — sending CA to those would revert packing progress.
   const auth = req.headers.get("authorization");
   const skipped: string[] = [];
-  const sent: string[] = [];
+  const sent: string[] = [];       // attempted (eligible + status-change call issued)
+  const caFailed: { customerCode: string; orderCodes: string[]; httpStatus: number | null; body: string }[] = [];
+  // Per-order outcome log, persisted to Supabase below so failures/skips survive
+  // past Vercel's log retention — this is what made #1520 undiagnosable.
+  const outcomeLog: { orderCode: string; customerCode: string; outcome: "sent" | "skipped" | "failed"; detectedStatus: string | null; httpStatus: number | null; errorBody: string | null }[] = [];
 
-  if (auth) {
+  // authHeaders() on the client always sends "Bearer <token>" even with an empty
+  // token, so `auth` is a non-empty string even when the user's session token is
+  // missing/expired. Guard against that explicitly instead of silently attempting
+  // (and silently failing) doomed WMS calls.
+  const hasRealToken = !!auth && auth.trim() !== "Bearer" && auth.replace(/^Bearer\s*/i, "").trim().length > 0;
+
+  if (auth && !hasRealToken) {
+    console.warn(`[cluster/close] NO TOKEN id=${id} — skipping CA status-change entirely (auth header was empty)`);
+  }
+
+  if (hasRealToken) {
     const grouped = new Map<string, string[]>();
     for (const bin of cluster.bins) {
       if (!grouped.has(bin.customerCode)) grouped.set(bin.customerCode, []);
@@ -113,31 +127,118 @@ export async function POST(req: NextRequest) {
             sent.push(code);
           } else {
             skipped.push(code); // DA/FA/AC/LC/EA — do not revert
+            outcomeLog.push({ orderCode: code, customerCode, outcome: "skipped", detectedStatus: status, httpStatus: null, errorBody: null });
             console.log(`[cluster/close] SKIP status=${status} order=${code}`);
           }
         }
 
-        if (skipped.length > 0) {
-          console.log(`[cluster/close] SKIPPED DA/FA orders id=${id} skipped=${skipped.join(",")}`);
-        }
         if (eligible.length === 0) return;
 
-        await fetch(`${WMS_BASE}/shipping/status-change`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: auth },
-          body: JSON.stringify({
-            warehouseCode: cluster.warehouseCode,
-            customerCode,
-            orderCodes: eligible,
-            newStatus: "CA",
-            completeDate: "",
-            cancelComment: "",
-          }),
-        }).catch(() => {});
+        try {
+          const res = await fetch(`${WMS_BASE}/shipping/status-change`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: auth },
+            body: JSON.stringify({
+              warehouseCode: cluster.warehouseCode,
+              customerCode,
+              orderCodes: eligible,
+              newStatus: "CA",
+              completeDate: "",
+              cancelComment: "",
+            }),
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            caFailed.push({ customerCode, orderCodes: eligible, httpStatus: res.status, body: body.slice(0, 500) });
+            for (const code of eligible) outcomeLog.push({ orderCode: code, customerCode, outcome: "failed", detectedStatus: null, httpStatus: res.status, errorBody: body.slice(0, 500) });
+            console.error(`[cluster/close] CA FAILED id=${id} customer=${customerCode} orders=${eligible.join(",")} httpStatus=${res.status} body=${body.slice(0, 500)}`);
+          } else {
+            for (const code of eligible) outcomeLog.push({ orderCode: code, customerCode, outcome: "sent", detectedStatus: null, httpStatus: res.status, errorBody: null });
+          }
+        } catch (e) {
+          caFailed.push({ customerCode, orderCodes: eligible, httpStatus: null, body: String(e) });
+          for (const code of eligible) outcomeLog.push({ orderCode: code, customerCode, outcome: "failed", detectedStatus: null, httpStatus: null, errorBody: String(e).slice(0, 500) });
+          console.error(`[cluster/close] CA NETWORK ERROR id=${id} customer=${customerCode} orders=${eligible.join(",")} error=${e}`);
+        }
       }),
     );
   }
 
-  console.log(`[cluster/close] DONE id=${id} sent=${sent.length} skipped=${skipped.length}`);
-  return NextResponse.json({ ok: true, sent: sent.length, skipped: skipped.length, skippedOrders: skipped });
+  console.log(`[cluster/close] DONE id=${id} sent=${sent.length} skipped=${skipped.length} caFailed=${caFailed.length}`);
+
+  // Non-blocking: record pick performance in Supabase
+  if (updated.completedAt && updated.completedBy) {
+    (async () => {
+      try {
+        const sbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+        const sbKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+        if (!sbUrl || !sbKey) return;
+        const { createClient } = await import("@supabase/supabase-js");
+        const sb = createClient(sbUrl, sbKey);
+        const durationMin = (new Date(updated.completedAt!).getTime() - new Date(updated.createdAt).getTime()) / 60000;
+        const activeDurationMin = updated.pickStartedAt
+          ? (new Date(updated.completedAt!).getTime() - new Date(updated.pickStartedAt).getTime()) / 60000
+          : null;
+        const itemCount = (updated.bins ?? []).reduce((s: number, b) => s + (b.items?.length ?? 0), 0);
+        await sb.from("pick_performance").upsert({
+          cluster_id: updated.id,
+          cluster_no: updated.clusterNo ?? null,
+          warehouse_code: updated.warehouseCode,
+          picker: updated.completedBy!,
+          cluster_created_at: updated.createdAt,
+          pick_started_at: updated.pickStartedAt ?? null,
+          completed_at: updated.completedAt!,
+          duration_min: Math.round(durationMin * 100) / 100,
+          active_duration_min: activeDurationMin != null ? Math.round(activeDurationMin * 100) / 100 : null,
+          bin_count: (updated.bins ?? []).length,
+          location_count: (updated.locationGroups ?? []).length,
+          item_count: itemCount,
+        }, { onConflict: "cluster_id", ignoreDuplicates: true });
+
+        // Permanent full-detail archive — Redis clusters expire after 7 days
+        // (CLUSTER_TTL), so mirror the complete record here before it's gone.
+        await sb.from("cluster_archive").upsert({
+          cluster_id: updated.id,
+          cluster_no: updated.clusterNo ?? null,
+          warehouse_code: updated.warehouseCode,
+          created_by: updated.createdBy ?? null,
+          completed_by: updated.completedBy!,
+          created_at: updated.createdAt,
+          completed_at: updated.completedAt!,
+          data: updated,
+        }, { onConflict: "cluster_id" });
+
+        // Persist per-order CA outcomes — this is what makes a future "status didn't
+        // change" report diagnosable after the fact, instead of needing live server
+        // logs that are gone by the time anyone checks.
+        if (outcomeLog.length > 0) {
+          await sb.from("ca_outcomes").insert(
+            outcomeLog.map((o) => ({
+              cluster_id: updated.id,
+              cluster_no: updated.clusterNo ?? null,
+              warehouse_code: updated.warehouseCode,
+              customer_code: o.customerCode,
+              order_code: o.orderCode,
+              outcome: o.outcome,
+              detected_status: o.detectedStatus,
+              http_status: o.httpStatus,
+              error_body: o.errorBody,
+              source: "close",
+            })),
+          );
+        }
+      } catch (e) {
+        console.warn("[cluster/close] pick_performance/cluster_archive/ca_outcomes write failed:", e);
+      }
+    })();
+  }
+
+  return NextResponse.json({
+    ok: true,
+    sent: sent.length,
+    skipped: skipped.length,
+    skippedOrders: skipped,
+    caFailed: caFailed.length,
+    caFailedDetail: caFailed,
+  });
 }

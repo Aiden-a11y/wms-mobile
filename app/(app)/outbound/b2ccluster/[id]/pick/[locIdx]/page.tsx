@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, CheckCircle2, Loader2, AlertCircle, ScanLine, Package } from "lucide-react";
+import { ChevronLeft, CheckCircle2, Loader2, AlertCircle, ScanLine, Package, Siren, X } from "lucide-react";
 import type { B2CCluster, B2CClusterLocationGroup, B2CClusterTask } from "@/lib/b2c-cluster";
 import { binColor } from "@/lib/b2c-cluster";
 import { authHeaders } from "@/lib/api";
@@ -77,6 +77,17 @@ export default function B2CClusterPickPage() {
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const [completedTasks, setCompletedTasks] = useState<B2CClusterTask[]>([]);
+  // SKUs already scanned at this location visit — re-scanning the same product
+  // for another bin at the same location is skipped (location itself is only
+  // ever scanned once per page instance too, since this page is one location).
+  const [scannedSkus, setScannedSkus] = useState<Set<string>>(new Set());
+
+  // Exception reporting
+  const [exModal, setExModal] = useState(false);
+  const [exType, setExType] = useState<"wrong_sku" | "bin_empty" | "shortage" | "">("");
+  const [exShortageQty, setExShortageQty] = useState("");
+  const [exSubmitting, setExSubmitting] = useState(false);
+  const [exDone, setExDone] = useState(false);
 
   const locRef = useRef<HTMLInputElement>(null);
   const skuRef = useRef<HTMLInputElement>(null);
@@ -98,6 +109,11 @@ export default function B2CClusterPickPage() {
     if (step === "scan_sku") setTimeout(() => skuRef.current?.focus(), 100);
   }, [step]);
 
+  // Idempotent — server only writes pickStartedAt the first time this fires for a cluster.
+  const markPickStarted = useCallback(() => {
+    fetch(`/api/cluster/pick-start?id=${encodeURIComponent(id)}`, { method: "POST" }).catch(() => {});
+  }, [id]);
+
   const handleLocScan = useCallback(async () => {
     if (!grp || !locInput.trim()) return;
     const input = normalizeCode(locInput);
@@ -107,6 +123,7 @@ export default function B2CClusterPickPage() {
       setLocError("");
       setLocInput("");
       setStep("scan_sku");
+      markPickStarted();
       return;
     }
 
@@ -125,6 +142,7 @@ export default function B2CClusterPickPage() {
           setLocError("");
           setLocInput("");
           setStep("scan_sku");
+          markPickStarted();
           return;
         }
       }
@@ -132,7 +150,7 @@ export default function B2CClusterPickPage() {
 
     setLocError(`Expected: ${grp.locationCode}`);
     setLocInput("");
-  }, [locInput, grp, cluster]);
+  }, [locInput, grp, cluster, markPickStarted]);
 
   const handleSkuScan = useCallback(() => {
     if (!currentTask || !skuInput.trim()) return;
@@ -141,6 +159,7 @@ export default function B2CClusterPickPage() {
     if (input === expected) {
       setSkuError("");
       setSkuInput("");
+      setScannedSkus((prev) => new Set(prev).add(expected));
       setStep("confirm");
     } else {
       setSkuError(`Expected: ${currentTask.sku}`);
@@ -164,13 +183,15 @@ export default function B2CClusterPickPage() {
     const nextIdx = taskIdx + 1;
 
     if (nextIdx < grp.tasks.length) {
-      // More tasks at this location — go back to scan_loc (user re-scans location)
+      // More bins at this same location. Location is only ever scanned once per
+      // page instance; the product barcode is only re-scanned if the next bin
+      // needs a different SKU than one already scanned here.
+      const nextTask = grp.tasks[nextIdx];
       setTaskIdx(nextIdx);
-      setStep("scan_loc");
-      setLocInput("");
       setSkuInput("");
-      setLocError("");
       setSkuError("");
+      setConfirmError("");
+      setStep(scannedSkus.has(normalizeCode(nextTask.sku)) ? "confirm" : "scan_sku");
     } else {
       // All tasks at this location done
       markLocationDone(id, locIdx);
@@ -200,6 +221,45 @@ export default function B2CClusterPickPage() {
     }
   }
 
+  async function submitException() {
+    if (!exType || !grp || !cluster) return;
+    setExSubmitting(true);
+    try {
+      const { getAuth } = await import("@/lib/auth");
+      const u = getAuth();
+      const reportedBy = u?.name || u?.userId || "unknown";
+      await fetch("/api/cluster/exception", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clusterId: id,
+          clusterNo: cluster.clusterNo ?? null,
+          warehouseCode: cluster.warehouseCode,
+          locationCode: grp.locationCode,
+          sku: currentTask?.sku ?? null,
+          productName: currentTask?.skuName ?? null,
+          binCode: currentTask?.binNo != null ? String(currentTask.binNo) : null,
+          orderCode: currentTask?.orderCode ?? null,
+          customerCode: null,
+          exceptionType: exType,
+          shortageQty: exType === "shortage" && exShortageQty ? Number(exShortageQty) : null,
+          reportedBy,
+        }),
+      });
+      setExDone(true);
+      setTimeout(() => {
+        setExModal(false);
+        setExDone(false);
+        setExType("");
+        setExShortageQty("");
+      }, 1500);
+    } catch {
+      // silent fail — exception reporting shouldn't block picking
+    } finally {
+      setExSubmitting(false);
+    }
+  }
+
   if (loading || !cluster || !grp) return (
     <div className="min-h-screen flex items-center justify-center" style={DARK}>
       <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
@@ -211,6 +271,88 @@ export default function B2CClusterPickPage() {
 
   return (
     <div className="min-h-screen flex flex-col" style={DARK}>
+
+      {/* ── Exception modal ── */}
+      {exModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,0.7)" }}>
+          <div className="w-full max-w-md rounded-t-3xl p-6 space-y-5"
+            style={{ background: "#1a2540", border: "1px solid rgba(255,255,255,0.1)" }}>
+            {exDone ? (
+              <div className="flex flex-col items-center py-6 gap-3">
+                <CheckCircle2 className="w-12 h-12 text-emerald-400" />
+                <p className="text-base font-bold text-white">Exception Recorded</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Siren className="w-5 h-5 text-red-400" />
+                    <p className="text-base font-bold text-white">Report Exception</p>
+                  </div>
+                  <button onClick={() => { setExModal(false); setExType(""); setExShortageQty(""); }}
+                    className="p-1.5 rounded-lg text-slate-400 active:text-white"
+                    style={{ background: "rgba(255,255,255,0.08)" }}>
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Current context */}
+                <div className="rounded-xl px-4 py-3 text-xs space-y-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>
+                  <p className="text-slate-400">Location: <span className="text-white font-mono font-bold">{grp.locationCode}</span></p>
+                  {currentTask && (
+                    <>
+                      <p className="text-slate-400">SKU: <span className="text-white font-mono">{currentTask.sku}</span></p>
+                      <p className="text-slate-400">Order: <span className="text-white font-mono">{currentTask.orderCode}</span></p>
+                    </>
+                  )}
+                </div>
+
+                {/* Exception type */}
+                <div className="space-y-2">
+                  {(["wrong_sku", "bin_empty", "shortage"] as const).map((t) => {
+                    const labels = { wrong_sku: "🔄  다른 SKU", bin_empty: "📭  Bin Empty", shortage: "⚠️  부족" };
+                    const sel = exType === t;
+                    return (
+                      <button key={t} onClick={() => setExType(t)}
+                        className="w-full py-3.5 rounded-2xl text-sm font-bold text-left px-5 transition-all active:scale-[0.98]"
+                        style={{
+                          background: sel ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.06)",
+                          border: sel ? "2px solid rgba(239,68,68,0.7)" : "1px solid rgba(255,255,255,0.1)",
+                          color: sel ? "#fca5a5" : "#cbd5e1",
+                        }}>
+                        {labels[t]}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Shortage qty input */}
+                {exType === "shortage" && (
+                  <div>
+                    <p className="text-xs text-slate-400 mb-1.5">부족 수량 (optional)</p>
+                    <input
+                      type="number" min={1} value={exShortageQty}
+                      onChange={(e) => setExShortageQty(e.target.value)}
+                      placeholder="예: 3"
+                      className="w-full rounded-xl px-4 py-3 text-white text-sm font-mono focus:outline-none"
+                      style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)" }}
+                    />
+                  </div>
+                )}
+
+                <button
+                  onClick={submitException}
+                  disabled={!exType || exSubmitting}
+                  className="w-full py-4 rounded-2xl text-sm font-black text-white disabled:opacity-40 active:scale-[0.98] transition-all"
+                  style={{ background: exType ? "#dc2626" : "#374151" }}>
+                  {exSubmitting ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Submit Exception"}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       <header className="px-5 py-4 flex items-center gap-3 flex-shrink-0" style={HDR_BORDER}>
         <button onClick={() => router.push(`/outbound/b2ccluster/${encodeURIComponent(id)}`)}
           className="p-1 text-slate-400 active:text-white">
@@ -220,7 +362,11 @@ export default function B2CClusterPickPage() {
           <p className="text-base font-bold text-white">Location {locIdx + 1} / {totalLocs}</p>
           <p className="font-mono text-xs text-blue-400">{grp.locationCode}</p>
         </div>
-        <span className="text-xs text-slate-500">{grp.tasks.length} pick{grp.tasks.length !== 1 ? "s" : ""}</span>
+        <button onClick={() => setExModal(true)}
+          className="p-2 rounded-xl active:scale-95 transition-all"
+          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)" }}>
+          <Siren className="w-5 h-5 text-red-400" />
+        </button>
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-6 flex flex-col gap-4 overflow-y-auto">
@@ -347,17 +493,20 @@ export default function B2CClusterPickPage() {
         {/* ── confirm (put in bin) ── */}
         {step === "confirm" && currentTask && (
           <div className="rounded-2xl p-5 space-y-4 flex flex-col items-center text-center">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Place in Cart Bin</p>
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Place in Cart Bin</p>
+              <p className="font-mono text-xs text-blue-400 mt-1">{grp.locationCode} · Bin {taskIdx + 1} of {grp.tasks.length}</p>
+            </div>
 
-            <div className="w-36 h-36 rounded-3xl flex items-center justify-center text-6xl font-black shadow-2xl"
+            <div className="w-40 h-40 rounded-3xl flex items-center justify-center text-7xl font-black shadow-2xl"
               style={{ backgroundColor: taskColor.bg, color: taskColor.text, boxShadow: `0 0 40px ${taskColor.bg}60` }}>
               {currentTask.binNo}
             </div>
 
             <div>
-              <p className="font-mono text-lg font-black text-white">{currentTask.sku}</p>
+              <p className="text-4xl font-black text-blue-300">×{currentTask.qty} EA</p>
+              <p className="font-mono text-base font-bold text-white mt-2">{currentTask.sku}</p>
               {currentTask.skuName && <p className="text-sm text-slate-400 mt-1">{currentTask.skuName}</p>}
-              <p className="text-3xl font-black text-blue-300 mt-2">×{currentTask.qty} EA</p>
               <p className="text-xs text-slate-500 mt-1">Order: {currentTask.orderCode}</p>
             </div>
 
