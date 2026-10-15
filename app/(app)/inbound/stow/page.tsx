@@ -111,6 +111,7 @@ async function checkLocationOccupied(
       Array.isArray(dataField?.list) ? dataField.list  :
       Array.isArray(j)               ? j               : [];
 
+    console.log("[stow-occupancy] inventory/detail items:", JSON.stringify(items?.slice(0, 3)));
     const hit = items.find((item) => {
       const bc = [item.zoneName ?? item.zone ?? item.zoneCode,
                   item.aisleName ?? item.aisle ?? item.aisleCode,
@@ -156,6 +157,7 @@ async function checkLocationOccupied(
       Array.isArray(j?.data)       ? j.data       :
       Array.isArray(j)             ? j             : [];
 
+    console.log("[stow-occupancy] location/list rows:", JSON.stringify(rows?.slice(0, 2)));
     const match = rows.find((row) => {
       const bc = [row.zoneNm ?? row.zoneName ?? row.zone,
                   row.aisleNm ?? row.aisleName ?? row.aisle,
@@ -429,6 +431,9 @@ function StowFlowInner() {
       const locationWarehouseCd = d.warehouseCd != null ? String(d.warehouseCd) : "";
 
       const loc: LocationInfo = { locationCode, locationId, warehouseCd: locationWarehouseCd, zoneName, aisleName, bayName, levelName, positionName };
+
+      // DEBUG — remove after confirming field names
+      console.log("[stow-occupancy] location-search response d:", JSON.stringify(d));
 
       // ── Fast occupancy check: use qty from location-search response directly ──
       const directQty = Number(
