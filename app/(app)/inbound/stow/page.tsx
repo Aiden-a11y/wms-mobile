@@ -90,6 +90,7 @@ async function checkLocationOccupied(
   productSku: string,
   tagLotNo = "",
   tagExpireDate = "",
+  rawBarcode = "",
 ): Promise<BlockReason | null> {
   const pad = (s: string) => String(s).padStart(2, "0");
   const locBarcode = [loc.zoneName, loc.aisleName, loc.bayName, loc.levelName, loc.positionName]
@@ -142,10 +143,12 @@ async function checkLocationOccupied(
 
   // ── Call 2: location/list qty check ────────────────────────
   try {
+    // Use the original barcode first (most likely to match), fall back to locationCode
+    const searchTerm = rawBarcode || loc.locationCode;
     const r = await fetch("/api/wms/warehouse/location/list", {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ page: 1, pageSize: 20, warehouseCode, search: loc.locationCode }),
+      body: JSON.stringify({ page: 1, pageSize: 20, warehouseCode, search: searchTerm }),
     });
     const j = await r.json().catch(() => null);
     const rows: Record<string, unknown>[] =
@@ -161,11 +164,16 @@ async function checkLocationOccupied(
                   row.positionNm ?? row.positionName ?? row.position]
         .map((v) => pad(String(v ?? ""))).join("");
       const lc = String(row.locationCode ?? row.remark ?? "").toLowerCase().replace(/[\s\-_/]+/g, "");
-      return bc === locBarcode || lc === locNorm;
+      // Also match against the raw barcode directly
+      const rawNorm = rawBarcode.toLowerCase().replace(/[\s\-_/]+/g, "");
+      return bc === locBarcode || lc === locNorm || (rawNorm && lc === rawNorm);
     });
 
     if (match) {
-      const qty = Number(match.currentQty ?? match.locQty ?? match.qty ?? match.inventoryQty ?? -1);
+      const qty = Number(
+        match.currentQty ?? match.locQty ?? match.qty ?? match.inventoryQty ??
+        match.usedQty ?? match.totalQty ?? match.currentInventory ?? -1
+      );
       if (qty > 0) return { type: "occupied", locationCode: loc.locationCode, existingQty: qty };
     }
   } catch { /* inconclusive — allow */ }
@@ -422,8 +430,19 @@ function StowFlowInner() {
 
       const loc: LocationInfo = { locationCode, locationId, warehouseCd: locationWarehouseCd, zoneName, aisleName, bayName, levelName, positionName };
 
-      // ── Occupancy check (after location-search, no concurrent requests) ──
-      const blocked = await checkLocationOccupied(loc, wc, tag.customerCode, tag.sku, tag.lotNo ?? "", tag.expireDate ?? "");
+      // ── Fast occupancy check: use qty from location-search response directly ──
+      const directQty = Number(
+        d.currentQty ?? d.locQty ?? d.usedQty ?? d.totalQty ??
+        d.inventoryQty ?? d.inventoryCount ?? d.currentInventory ?? -1
+      );
+      if (directQty > 0) {
+        setBlockReason({ type: "occupied", locationCode, existingQty: directQty });
+        setLocLoading(false);
+        return;
+      }
+
+      // ── Secondary occupancy check via inventory/detail and location/list ──
+      const blocked = await checkLocationOccupied(loc, wc, tag.customerCode, tag.sku, tag.lotNo ?? "", tag.expireDate ?? "", raw);
       if (blocked) {
         setBlockReason(blocked);
         setLocLoading(false);
